@@ -103,17 +103,41 @@ docker-compose.yml
 admin-credentials.example.env
 ```
 
-## Git: что коммитить
+## Git: что коммитить и чего в репозитории быть не должно
 
-- Коммитятся исходники, `Dockerfile`, `docker-compose.yml`, `admin-credentials.example.env`, этот `README.md`.
-- **Не коммитить:** `admin-credentials.env`, `node_modules/`, `dist/`, локальные `.env`, ключи и пароли.
+### В репозитории есть всё нужное для разработки и запуска
 
-Перед коммитом проверьте, что секреты не попали в индекс:
+После `git clone` достаточно:
+
+| Задача | Что восстанавливается |
+|--------|------------------------|
+| Запуск в Docker | `Dockerfile` собирает фронт (`npm run build` внутри образа), в образ не нужен локальный `dist/` |
+| Зависимости Node | `package.json` + `package-lock.json` → `npm ci` |
+| Секреты админа | Шаблон `admin-credentials.example.env` → скопировать в `admin-credentials.env` (файл не в Git) |
+| Статика и исходники | `public/`, `src/`, `server/`, `index.html`, `vite.config.js` |
+
+### Не коммитить (уже в `.gitignore`)
+
+| Путь / тип | Причина |
+|------------|---------|
+| `node_modules/` | Восстанавливается через `npm ci` |
+| `dist/` | Сборка Vite / этап Docker build |
+| `admin-credentials.env` | Логин и пароль администратора |
+| `.env`, `*.local` | Локальные секреты и оверрайды |
+| `test-results/`, `playwright-report/`, `coverage/` | Артефакты тестов (если появятся) |
+| `*.pem`, `*.key` | Ключи |
+| Личные настройки IDE | Вся `.vscode/`, кроме закоммиченного `extensions.json` |
+
+Шаблон переменных для локального запуска без Docker: `.env.example` (без секретов).
+
+### Перед коммитом
 
 ```bash
 git status
 git diff --cached
 ```
+
+Убедитесь, что в индекс не попали `admin-credentials.env`, `.env` и каталоги `dist/` / `node_modules/`.
 
 ## Лицензия и использование
 

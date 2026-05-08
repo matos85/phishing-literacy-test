@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 .env
+.env.development.local
+.env.production.local
 
 # Учётные данные администратора (копия с admin-credentials.example.env)
 admin-credentials.env
@@ -19,6 +21,11 @@ admin-credentials.env
 # Playwright / тестовые артефакты
 test-results/
 playwright-report/
+coverage/
+
+# Ключи и локальные секреты
+*.pem
+*.key
 
 # Editor directories and files
 .vscode/*
