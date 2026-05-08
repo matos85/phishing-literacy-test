@@ -5,6 +5,27 @@ HTTPS: `https://github.com/matos85/phishing-literacy-test.git`
 
 Учебный лендинг и форма регистрации с админ-панелью: фронтенд на **Vue 3 + Vite**, бэкенд на **Node.js** (без фреймворка, `http`), база **MySQL**. Сборка для продакшена — **Docker**.
 
+## Возможности
+
+| Область | Описание |
+|---------|----------|
+| Публичная часть | Лендинг, многошаговая регистрация в «розыгрыш», сценарий с главным призом или отказ от него |
+| API | `GET /api/health`, вход/выход/me (`/api/auth/*`), приём и список заявок (`/api/registrations`) |
+| Админка `/admin` | Сессия по cookie, таблица заявок с автообновлением, экспорт в **Excel**, очистка базы |
+| UI админа | После входа скрывается шапка DTEL; сверху справа — только кнопка **Выход** |
+| Номера розыгрыша | Назначаются **на сервере**, формат `XXX-XXX`; в MySQL уникальный индекс, коллизии обрабатываются повторной генерацией |
+| Данные | Заявки и пароли админа в MySQL; тестовые заявки в репозиторий не входят |
+
+## Стек
+
+| Слой | Технологии |
+|------|------------|
+| Клиент | Vue 3, Vue Router, Vite 8, SheetJS (`xlsx`) для экспорта |
+| Сервер | Node.js ESM, `mysql2`, сессии в памяти, хеш пароля (scrypt) |
+| Инфраструктура | Docker multi-stage, MySQL 8, Compose |
+
+Версия релиза в `package.json`: **1.0.0**.
+
 ## Требования
 
 - **Docker Desktop** (Compose V2)
@@ -95,12 +116,18 @@ npm run start
 ## Структура проекта
 
 ```
-server/           # Node HTTP API, миграции, сид только админа
-src/              # Vue SPA
-dist/             # результат npm run build (артефакт, в Git не входит)
+server/                  # HTTP API, миграции MySQL, ожидание БД, seed только админа
+src/
+  components/          # AppHeader, AdminSessionBar, HeroSlideshow
+  composables/         # useAdminSession — флаг входа админа для шапки
+  lib/                 # apiAdmin, apiRegistration, clientMeta
+  views/               # главная, регистрация, завершение, админка
+public/                # favicon, иллюстрации hero
+dist/                  # сборка Vite (не в Git)
 Dockerfile
 docker-compose.yml
 admin-credentials.example.env
+.env.example
 ```
 
 ## Git: что коммитить и чего в репозитории быть не должно

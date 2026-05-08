@@ -220,7 +220,8 @@ async function declineMainPrize() {
       victorina: null,
     }
 
-    await submitRegistration(record)
+    const data = await submitRegistration(record)
+    if (data?.raffleNumber) raffleNumber.value = data.raffleNumber
     await router.replace({ name: 'register-declined-main-prize' })
   } catch (e) {
     console.error(e)
@@ -293,7 +294,8 @@ async function onSubmit() {
       telemetry,
     }
 
-    await submitRegistration(record)
+    const data = await submitRegistration(record)
+    if (data?.raffleNumber) raffleNumber.value = data.raffleNumber
     await router.replace({ name: 'register-complete' })
   } catch (e) {
     console.error(e)

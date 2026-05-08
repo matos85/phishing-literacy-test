@@ -86,6 +86,12 @@ function requireAuth(req) {
   return { token, login: s.login }
 }
 
+/** Формат как на клиенте: «123-456»; сервер назначает номер и гарантирует уникальность в БД. */
+function randomRaffleNumber() {
+  const n = Math.floor(100000 + Math.random() * 900000)
+  return String(n).replace(/(\d{3})(\d{3})/, '$1-$2')
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname
 
@@ -162,17 +168,20 @@ async function handleApi(req, res, url) {
     if (Number.isNaN(submittedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
 
     const pool = getPool()
-    try {
-      await pool.execute(
-        `INSERT INTO registrations (
+    const insertSql = `INSERT INTO registrations (
           id, full_name, email, raffle_number, main_prize_opt_in, flow,
           quiz_category, quiz_category_label, victorina, telemetry, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`,
-        [
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`
+
+    const maxRaffleAttempts = 64
+    for (let attempt = 0; attempt < maxRaffleAttempts; attempt++) {
+      const raffleNumber = randomRaffleNumber()
+      try {
+        await pool.execute(insertSql, [
           id,
           fullName,
           email,
-          body.raffleNumber || null,
+          raffleNumber,
           body.mainPrizeOptIn ? 1 : 0,
           flow,
           body.quizCategory || null,
@@ -180,14 +189,21 @@ async function handleApi(req, res, url) {
           victorina == null ? null : JSON.stringify(victorina),
           JSON.stringify(telemetry),
           submittedAt,
-        ],
-      )
-    } catch (e) {
-      if (e.code === 'ER_DUP_ENTRY') return json(res, 409, { error: 'Запись с таким id уже есть' })
-      console.error(e)
-      return json(res, 500, { error: 'Ошибка сохранения' })
+        ])
+        return json(res, 201, { ok: true, id, raffleNumber })
+      } catch (e) {
+        if (e.code === 'ER_DUP_ENTRY') {
+          const msg = String(e.sqlMessage || '')
+          if (msg.includes('PRIMARY') || msg.includes(`'PRIMARY'`)) {
+            return json(res, 409, { error: 'Запись с таким id уже есть' })
+          }
+          continue
+        }
+        console.error(e)
+        return json(res, 500, { error: 'Ошибка сохранения' })
+      }
     }
-    return json(res, 201, { ok: true, id })
+    return json(res, 503, { error: 'Не удалось назначить уникальный номер участника' })
   }
 
   return json(res, 404, { error: 'Not found' })

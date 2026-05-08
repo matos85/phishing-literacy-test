@@ -27,11 +27,25 @@ const statements = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ]
 
+async function ensureUniqueRaffleNumberIndex(pool) {
+  try {
+    await pool.execute('ALTER TABLE registrations ADD UNIQUE INDEX uk_raffle_number (raffle_number)')
+  } catch (e) {
+    if (e.code === 'ER_DUP_KEYNAME' || e.errno === 1061) return
+    if (e.code === 'ER_DUP_ENTRY' || e.errno === 1062) {
+      console.warn('[migrate] пропуск UNIQUE по raffle_number: в таблице есть повторяющиеся номера')
+      return
+    }
+    throw e
+  }
+}
+
 export async function migrate() {
   const pool = getPool()
   for (const sql of statements) {
     await pool.execute(sql)
   }
+  await ensureUniqueRaffleNumberIndex(pool)
   console.log('[migrate] ok')
 }
 
