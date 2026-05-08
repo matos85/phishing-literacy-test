@@ -1,0 +1,115 @@
+/* Шрифты как на https://dtel.ru/ (TTFirsNeue / TTBluescreens из их CDN) */
+@font-face {
+  font-family: TTFirsNeue;
+  src:
+    url('https://dtel.ru/fonts/TTFirsNeue-Medium.woff2') format('woff2'),
+    url('https://dtel.ru/fonts/TTFirsNeue-Medium.woff') format('woff');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: TTBluescreens;
+  src:
+    url('https://dtel.ru/fonts/TTBluescreens-Medium.woff2') format('woff2'),
+    url('https://dtel.ru/fonts/TTBluescreens-Medium.woff') format('woff');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: TTBluescreens;
+  src:
+    url('https://dtel.ru/fonts/TTBluescreens-DemiBold.woff2') format('woff2'),
+    url('https://dtel.ru/fonts/TTBluescreens-DemiBold.woff') format('woff');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Токены по публичному entry CSS dtel.ru */
+:root {
+  --gray-105: #010101;
+  --gray-100: #0a0a0a;
+  --blue-default: #24376b;
+  --blue-dark: #0a162f;
+  --blue-hover: #384b7f;
+  --system-orange: #f64d24;
+  --orange-hover: #e23910;
+  --system-red: #cd251c;
+  --system-green: #82bb5d;
+  --page-background: #f9fafb;
+  --white-100: #fff;
+  --white-80: hsla(0, 0%, 100%, 0.8);
+  --white-60: hsla(0, 0%, 100%, 0.6);
+  --white-10: hsla(0, 0%, 100%, 0.102);
+  --mobile-menu: rgba(36, 55, 107, 0.92);
+  --orange-gradient: linear-gradient(90deg, #f64d24, #0a162f);
+  --blue-gradient: linear-gradient(90deg, #5c8dc9, #0a162f);
+  --ocean-gradient: linear-gradient(90deg, #94cdd5, #0a162f);
+  --max-width: 1980px;
+  /* Двухрядное меню как на dtel.ru: верх + низ */
+  --header-top-row: 58px;
+  --header-bottom-row: 54px;
+  --header-height: calc(var(--header-top-row) + var(--header-bottom-row));
+  --header-height-mobile: var(--header-height);
+  --admin-session-bar-height: 48px;
+  --dtel-header-bg: #000000;
+  --dtel-header-divider: #333333;
+  --white-40: hsla(0, 0%, 100%, 0.4);
+  --offset-top-desktop: 60px;
+  --offset-bottom-desktop: 80px;
+  --offset-side-desktop: 40px;
+  --offset-top-tablet: 50px;
+  --offset-bottom-tablet: 70px;
+  --offset-side-tablet: 30px;
+  --offset-top-mobile: 50px;
+  --offset-bottom-mobile: 70px;
+  --offset-side-mobile: 20px;
+  --font-body: TTFirsNeue, 'Manrope', 'Helvetica Neue', Helvetica, sans-serif;
+  --font-display: TTBluescreens, TTFirsNeue, 'Manrope', 'Helvetica Neue', sans-serif;
+  --font-dtel-wordmark: TTBluescreens, TTFirsNeue, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-body);
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--gray-100);
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+#app {
+  min-height: 100dvh;
+}
+
+body.overflow-hidden {
+  overflow: hidden;
+}

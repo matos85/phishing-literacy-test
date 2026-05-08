@@ -1,0 +1,35 @@
+services:
+  db:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: rootsecret
+      MYSQL_DATABASE: phishing_literacy
+      MYSQL_USER: app
+      MYSQL_PASSWORD: appsecret
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootsecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  app:
+    build: .
+    ports:
+      - "8080:3000"
+    env_file:
+      - admin-credentials.env
+    environment:
+      DATABASE_URL: mysql://app:appsecret@db:3306/phishing_literacy
+      PORT: "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
