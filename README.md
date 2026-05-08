@@ -1,5 +1,8 @@
 # Phishing Literacy Test
 
+**Репозиторий:** [github.com/matos85/phishing-literacy-test](https://github.com/matos85/phishing-literacy-test)  
+HTTPS: `https://github.com/matos85/phishing-literacy-test.git`
+
 Учебный лендинг и форма регистрации с админ-панелью: фронтенд на **Vue 3 + Vite**, бэкенд на **Node.js** (без фреймворка, `http`), база **MySQL**. Сборка для продакшена — **Docker**.
 
 ## Требования
@@ -12,7 +15,7 @@
 1. Клонировать репозиторий:
 
    ```bash
-   git clone <URL-репозитория>
+   git clone https://github.com/matos85/phishing-literacy-test.git
    cd phishing-literacy-test
    ```
 
