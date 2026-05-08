@@ -130,6 +130,17 @@ admin-credentials.example.env
 .env.example
 ```
 
+## После `git clone`
+
+| Задача | Что восстанавливается |
+|--------|------------------------|
+| Запуск в Docker | `Dockerfile` собирает фронт (`npm run build` внутри образа), локальный `dist/` не обязателен |
+| Зависимости Node | `package.json` + `package-lock.json` → `npm ci` |
+| Секреты админа | Шаблон `admin-credentials.example.env` → скопировать в `admin-credentials.env` |
+| Статика и исходники | `public/`, `src/`, `server/`, `index.html`, `vite.config.js` |
+
+Шаблон переменных для локального запуска без Docker: `.env.example`.
+
 ## Лицензия и использование
 
 Проект предназначен для обучения осознанности в отношении фишинга. Используйте только в законных сценариях и с согласием участников.
