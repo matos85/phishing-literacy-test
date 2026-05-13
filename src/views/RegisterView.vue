@@ -17,7 +17,7 @@ const step = ref(0)
 const form = reactive({
   fullName: '',
   email: '',
-  /** Для записи в API: опрос о фишинге. */
+  /** Для записи в API: блок опроса (категория). */
   quizCategory: 'infosec',
 })
 
@@ -35,116 +35,31 @@ const submitting = ref(false)
 
 const mainPrizeOptIn = ref(false)
 
-/** Пул вопросов про фишинг: для каждого пользователя случайно выбирается один. */
-const PHISHING_QUESTION_POOL = [
-  {
-    id: 'ph-1',
-    text: 'Фишинг — это в первую очередь…',
-    options: [
-      { value: 'a', text: 'Официальная рассылка скидок от бренда' },
-      { value: 'b', text: 'Попытка обманом получить данные или заставить совершить опасное действие' },
-      { value: 'c', text: 'Только поломка оборудования в офисе' },
-    ],
-  },
-  {
-    id: 'ph-2',
-    text: 'Какой признак чаще всего должен насторожить в письме «от службы безопасности» или IT?',
-    options: [
-      { value: 'a', text: 'Срочное требование пароля по ссылке или странный домен в адресе' },
-      { value: 'b', text: 'Знакомый коллега в копии и внутренний шаблон оформления' },
-      { value: 'c', text: 'Номер заявки из вашей системы учёта' },
-    ],
-  },
-  {
-    id: 'ph-3',
-    text: 'Целевой фишинг (spear phishing) отличается от массовой рассылки тем, что…',
-    options: [
-      { value: 'a', text: 'Письмо всегда только на английском языке' },
-      { value: 'b', text: 'Злоумышленник заранее собирает сведения о жертве и персонализирует сообщение' },
-      { value: 'c', text: 'Такие письма никогда не содержат вложений' },
-    ],
-  },
-  {
-    id: 'ph-4',
-    text: 'Сообщение в мессенджере с «ссылкой на оплату штрафа» от неизвестного номера — это чаще всего…',
-    options: [
-      { value: 'a', text: 'СМС-фишинг / фишинг в мессенджерах (smishing)' },
-      { value: 'b', text: 'Обязательное уведомление оператора связи' },
-      { value: 'c', text: 'Нормальный способ доставки квитанций госуслуг' },
-    ],
-  },
-  {
-    id: 'ph-5',
-    text: 'Если вы уже перешли по подозрительной ссылке, в первую очередь разумно…',
-    options: [
-      { value: 'a', text: 'Сообщить в IT/безопасность по регламенту и не вводить пароли на этой странице' },
-      { value: 'b', text: 'Сразу переустановить Windows без резервной копии' },
-      { value: 'c', text: 'Ничего не делать — «само пройдёт»' },
-    ],
-  },
-  {
-    id: 'ph-6',
-    text: 'Письмо «от руководителя» с просьбой срочно перевести деньги на карту — типичный признак…',
-    options: [
-      { value: 'a', text: 'BEC / подмены руководителя (CEO fraud)' },
-      { value: 'b', text: 'Официального корпоративного бонуса' },
-      { value: 'c', text: 'Обязательного налогового уведомления' },
-    ],
-  },
-  {
-    id: 'ph-7',
-    text: 'Двухфакторная аутентификация (2FA) при фишинге помогает, потому что…',
-    options: [
-      { value: 'a', text: 'Даже при украденном пароле вход часто останется невозможен без второго фактора' },
-      { value: 'b', text: 'Она полностью заменяет антивирус на рабочем ПК' },
-      { value: 'c', text: 'Она гарантирует, что письма не будут попадать в спам' },
-    ],
-  },
-  {
-    id: 'ph-8',
-    text: 'Поддомен или похожий символ в адресе сайта (например, вместо «o» — ноль) чаще используют для…',
-    options: [
-      { value: 'a', text: 'Подмены легитимного адреса и обмана пользователя' },
-      { value: 'b', text: 'Ускорения загрузки страницы' },
-      { value: 'c', text: 'Обязательного шифрования диска' },
-    ],
-  },
-  {
-    id: 'ph-9',
-    text: 'Вредное вложение «счёт.pdf.exe» замаскировано под документ. Что вернее?',
-    options: [
-      { value: 'a', text: 'Расширение .exe указывает на исполняемый файл, а не на обычный PDF' },
-      { value: 'b', text: 'Все вложения с .pdf в названии безопасны по определению' },
-      { value: 'c', text: 'Такие файлы открывает только бухгалтерия — остальным не страшно' },
-    ],
-  },
-  {
-    id: 'ph-10',
-    text: 'Сообщение «ваш аккаунт заблокирован — восстановите за 1 час» без обращения по имени чаще всего…',
-    options: [
-      { value: 'a', text: 'Типичный приём давления и массовой рассылки' },
-      { value: 'b', text: 'Гарантированно официальное уведомление банка' },
-      { value: 'c', text: 'Признак того, что письмо прошло DMARC-проверку' },
-    ],
-  },
-]
+/** Единственный вопрос шага 4 (знание регламентов / документации). */
+const STEP4_QUESTION = {
+  id: 'reg-doc-link-1',
+  text: 'Информационная безопасность. Что обязательно проверять перед переходом по ссылке в письме?',
+  options: [
+    { value: 'a', text: 'a) Только тему письма' },
+    {
+      value: 'b',
+      text: 'b) Адрес отправителя, так как он может быть подделан, проверяйте ссылку тщательно',
+    },
+    { value: 'c', text: 'c) Ничего, если письмо выглядит убедительно' },
+    { value: 'd', text: 'd) Только подпись' },
+  ],
+}
 
 const step3Loading = ref(false)
 const sessionQ1 = ref(null)
 let genTimeoutId = null
 
-function shuffleInPlace(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+function getStep4Question() {
+  return {
+    id: STEP4_QUESTION.id,
+    text: STEP4_QUESTION.text,
+    options: STEP4_QUESTION.options.map((o) => ({ ...o })),
   }
-  return arr
-}
-
-function pickOneRandomQuestion() {
-  const copy = PHISHING_QUESTION_POOL.map((q) => ({ ...q, options: q.options.map((o) => ({ ...o })) }))
-  shuffleInPlace(copy)
-  return copy[0]
 }
 
 function clearGenerationTimer() {
@@ -162,7 +77,7 @@ function beginStep3QuestionGeneration() {
   const ms = 850
   genTimeoutId = setTimeout(() => {
     genTimeoutId = null
-    sessionQ1.value = pickOneRandomQuestion()
+    sessionQ1.value = getStep4Question()
     form.quizCategory = 'infosec'
     step3Loading.value = false
   }, ms)
@@ -170,10 +85,10 @@ function beginStep3QuestionGeneration() {
 
 const stepLabel = computed(() => {
   if (step.value === 3 && step3Loading.value) {
-    return 'Подбор случайного вопроса…'
+    return 'Подготовка вопроса…'
   }
   if (step.value === 3 && !step3Loading.value) {
-    return `Шаг 4 из ${TOTAL_STEPS} · опрос`
+    return `Шаг 4 из ${TOTAL_STEPS} · вопрос`
   }
   return `Шаг ${step.value + 1} из ${TOTAL_STEPS}`
 })
@@ -415,17 +330,16 @@ async function onSubmit() {
           </div>
 
           <div v-show="step === 2" class="dialog__pane">
-            <h2 class="dialog__title">Опрос о фишинг-угрозах</h2>
+            <h2 class="dialog__title">Вопрос на знание регламентов компании</h2>
             <p class="dialog__hint dialog__hint--tight">
-              Дальше — короткий опрос на знание о фишинг-угрозах: один случайный вопрос и варианты ответа. Личные данные
-              не запрашиваем.
+              Случайным образом вам будет задан вопрос на знание документации. Пожалуйста, отвечайте внимательно.
             </p>
           </div>
 
           <div v-show="step === 3" class="dialog__pane">
             <template v-if="step3Loading">
               <h2 class="dialog__title">Генерация вопроса</h2>
-              <p class="dialog__hint">Случайный вопрос подбирается из базы опроса — обычно меньше секунды.</p>
+              <p class="dialog__hint">Вопрос готовится — обычно меньше секунды.</p>
               <div class="fake-gen" aria-live="polite" aria-busy="true">
                 <div class="fake-gen__spinner" />
                 <!--
@@ -438,8 +352,8 @@ async function onSubmit() {
               </div>
             </template>
             <template v-else>
-              <h2 class="dialog__title">Опрос</h2>
-              <p class="dialog__hint dialog__hint--quiz">Выберите один вариант ответа — личные данные не запрашиваем.</p>
+              <h2 class="dialog__title">Вопрос</h2>
+              <p class="dialog__hint dialog__hint--quiz">Выберите один вариант ответа</p>
               <div v-if="sessionQ1" class="victorina-q" role="radiogroup" :aria-labelledby="'vq1-' + sessionQ1.id">
                 <p :id="'vq1-' + sessionQ1.id" class="victorina-q__text">{{ sessionQ1.text }}</p>
                 <div class="victorina-q__options">

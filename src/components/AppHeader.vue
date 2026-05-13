@@ -2,7 +2,7 @@
 /**
  * Шапка по образцу newsite-front `app/components/Layout/Header/Header.vue`
  * (сетка, отступы, логотип `icons:logo` → файл `public/icons/logo.svg`).
- * Шрифты: TTBluescreens / TTFirsNeue / Manrope — локально (style.css + main.js).
+ * Шрифт текста шапки — **TTFirsNeue** (как `text11` / `CoreButtonHeader` на dtel.ru); файлы из `public/fonts` — с newsite-front.
  */
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -79,6 +79,23 @@ onUnmounted(() => {
           <span class="burger__bar" />
         </button>
 
+        <div class="header-top__navigation">
+          <div class="header-top__navigation-links">
+            <a
+              v-for="l in topLinks"
+              :key="l.label"
+              :href="l.href"
+              class="header-top__nav-link"
+              rel="noopener noreferrer"
+            >
+              {{ l.label }}
+            </a>
+          </div>
+          <a :href="accountHref" class="header-top__nav-link header-top__nav-link--cabinet" rel="noopener noreferrer">
+            Личный кабинет
+          </a>
+        </div>
+
         <a
           :href="accountHref"
           class="header-top__profile-button"
@@ -92,24 +109,6 @@ onUnmounted(() => {
             />
           </svg>
         </a>
-
-        <div class="header-top__navigation">
-          <div class="header-top__navigation-links">
-            <a
-              v-for="(l, i) in topLinks"
-              :key="l.label"
-              :href="l.href"
-              class="header-top__nav-link"
-              rel="noopener noreferrer"
-              :class="{ 'header-top__nav-link--sep': i > 0 }"
-            >
-              {{ l.label }}
-            </a>
-          </div>
-          <a :href="accountHref" class="header-top__nav-link header-top__nav-link--cabinet" rel="noopener noreferrer">
-            Личный кабинет
-          </a>
-        </div>
       </div>
 
       <nav class="header__bottom header-bottom" aria-label="Услуги">
@@ -177,7 +176,7 @@ onUnmounted(() => {
   z-index: 100;
   background: var(--dtel-header-bg);
   color: #fff;
-  font-family: TTBluescreens, TTFirsNeue, 'Manrope', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .header__container {
@@ -190,7 +189,7 @@ onUnmounted(() => {
 .header__top,
 .header__bottom {
   display: grid;
-  justify-items: stretch;
+  justify-items: center;
   align-items: stretch;
   height: var(--header-top-row);
   border-bottom: 1px solid var(--dtel-header-divider);
@@ -198,7 +197,7 @@ onUnmounted(() => {
 
 .header__top {
   grid-template-areas: 'home menu navigation';
-  grid-template-columns: 231px 100px minmax(0, 1fr);
+  grid-template-columns: 231px 100px auto;
 }
 
 .header__bottom {
@@ -286,22 +285,29 @@ onUnmounted(() => {
 .header-top__navigation {
   grid-area: navigation;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   gap: 50px;
   padding: 0 50px;
+  min-width: 0;
+  width: 100%;
 }
 
 .header-top__navigation-links {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 50px;
+  min-height: 0;
 }
 
 .header-top__nav-link {
-  font-weight: 600;
-  font-size: clamp(11px, 1vw, 13px);
-  letter-spacing: 0.1em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 18px;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
   color: #fff;
   text-decoration: none;
@@ -313,14 +319,9 @@ onUnmounted(() => {
   opacity: 0.82;
 }
 
-.header-top__nav-link--sep {
-  border-left: 1px solid var(--dtel-header-divider);
-  padding-left: 50px;
-  margin-left: -50px;
-}
-
 .header-top__nav-link--cabinet {
   flex-shrink: 0;
+  align-self: stretch;
 }
 
 .header-top__profile-button {
@@ -342,9 +343,10 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-weight: 600;
-  font-size: clamp(11px, 1vw, 13px);
-  letter-spacing: 0.1em;
+  font-weight: 500;
+  font-size: 11px;
+  line-height: 18px;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
   color: #fff;
   text-decoration: none;
