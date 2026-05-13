@@ -14,7 +14,6 @@ export function getClientMeta() {
     viewport:
       typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    referrer: typeof document !== 'undefined' && document.referrer ? document.referrer : null,
   }
 }
 

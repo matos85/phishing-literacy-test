@@ -1,9 +1,9 @@
-/* Шрифты как на https://dtel.ru/ (TTFirsNeue / TTBluescreens из их CDN) */
+/* Шрифты приложения: только локальные файлы (public/fonts) и npm @fontsource — без загрузки шрифтов из интернета. */
 @font-face {
   font-family: TTFirsNeue;
   src:
-    url('https://dtel.ru/fonts/TTFirsNeue-Medium.woff2') format('woff2'),
-    url('https://dtel.ru/fonts/TTFirsNeue-Medium.woff') format('woff');
+    url('/fonts/TTFirsNeue-Medium.woff2') format('woff2'),
+    url('/fonts/TTFirsNeue-Medium.woff') format('woff');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -12,8 +12,8 @@
 @font-face {
   font-family: TTBluescreens;
   src:
-    url('https://dtel.ru/fonts/TTBluescreens-Medium.woff2') format('woff2'),
-    url('https://dtel.ru/fonts/TTBluescreens-Medium.woff') format('woff');
+    url('/fonts/TTBluescreens-Medium.woff2') format('woff2'),
+    url('/fonts/TTBluescreens-Medium.woff') format('woff');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -22,8 +22,8 @@
 @font-face {
   font-family: TTBluescreens;
   src:
-    url('https://dtel.ru/fonts/TTBluescreens-DemiBold.woff2') format('woff2'),
-    url('https://dtel.ru/fonts/TTBluescreens-DemiBold.woff') format('woff');
+    url('/fonts/TTBluescreens-DemiBold.woff2') format('woff2'),
+    url('/fonts/TTBluescreens-DemiBold.woff') format('woff');
   font-weight: 600;
   font-style: normal;
   font-display: swap;
@@ -51,8 +51,9 @@
   --ocean-gradient: linear-gradient(90deg, #94cdd5, #0a162f);
   --max-width: 1980px;
   /* Двухрядное меню как на dtel.ru: верх + низ */
-  --header-top-row: 58px;
-  --header-bottom-row: 54px;
+  /* Как в newsite-front Header: два ряда по 50px → 100px */
+  --header-top-row: 50px;
+  --header-bottom-row: 50px;
   --header-height: calc(var(--header-top-row) + var(--header-bottom-row));
   --header-height-mobile: var(--header-height);
   --admin-session-bar-height: 48px;

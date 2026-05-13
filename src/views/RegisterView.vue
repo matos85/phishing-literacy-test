@@ -1,110 +1,199 @@
 <script setup>
-import { reactive, ref, computed } from 'vue'
-import { useRouter, RouterLink } from 'vue-router'
+import { reactive, ref, computed, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { submitRegistration } from '../lib/apiRegistration'
 import { buildTelemetry } from '../lib/clientMeta'
+import { getOrCreateParticipantId } from '../lib/participantId'
 
 const router = useRouter()
 
-function newRecordId() {
-  return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `rec-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
+/** Фон страницы — кадр из бывшей карусели главной (apartment). */
+const REGISTER_BG_IMAGE = '/images/hero/apartment.png'
 
-const TOTAL_STEPS = 6
+const TOTAL_STEPS = 4
 
 const step = ref(0)
 
 const form = reactive({
   fullName: '',
   email: '',
-  quizCategory: '',
+  /** Для записи в API: опрос о фишинге. */
+  quizCategory: 'infosec',
 })
 
 const quizAnswers = reactive({
   q1: '',
-  q2: '',
 })
 
 const errors = reactive({
   fullName: '',
   email: '',
-  quizCategory: '',
   quizQ1: '',
-  quizQ2: '',
 })
 
 const submitting = ref(false)
 
-const raffleNumber = ref(null)
 const mainPrizeOptIn = ref(false)
 
-/** Вопросы викторины по категории, выбранной на шаге с радиокнопками (далее — два вопроса викторины). */
-const QUIZ_BANK = {
-  company: [
-    {
-      id: 'co-1',
-      text: 'Что из перечисленного ближе к устойчивым целям сервисной компании в глазах клиента?',
-      options: [
-        { value: 'a', text: 'Максимум разовых акций без обязательств' },
-        { value: 'b', text: 'Предсказуемое качество связи и честные условия' },
-        { value: 'c', text: 'Только расширение географии без поддержки' },
-      ],
-    },
-    {
-      id: 'co-2',
-      text: 'Корпоратив ко дню компании в первую очередь про…',
-      options: [
-        { value: 'a', text: 'Закрытый отчёт только для руководства' },
-        { value: 'b', text: 'Участие сотрудников, признание вклада и общий настрой' },
-        { value: 'c', text: 'Исключительно финансовые показатели без диалога' },
-      ],
-    },
-  ],
-  infosec: [
-    {
-      id: 'is-1',
-      text: 'Фишинг — это в первую очередь…',
-      options: [
-        { value: 'a', text: 'Официальная рассылка скидок от бренда' },
-        { value: 'b', text: 'Попытка обманом получить данные или заставить совершить опасное действие' },
-        { value: 'c', text: 'Только поломка оборудования в офисе' },
-      ],
-    },
-    {
-      id: 'is-2',
-      text: 'Какой признак чаще всего должен насторожить в письме «от службы безопасности» или IT?',
-      options: [
-        { value: 'a', text: 'Срочное требование пароля по ссылке или странный домен в адресе' },
-        { value: 'b', text: 'Знакомый коллега в копии и внутренний шаблон оформления' },
-        { value: 'c', text: 'Номер заявки из вашей системы учёта' },
-      ],
-    },
-  ],
+/** Пул вопросов про фишинг: для каждого пользователя случайно выбирается один. */
+const PHISHING_QUESTION_POOL = [
+  {
+    id: 'ph-1',
+    text: 'Фишинг — это в первую очередь…',
+    options: [
+      { value: 'a', text: 'Официальная рассылка скидок от бренда' },
+      { value: 'b', text: 'Попытка обманом получить данные или заставить совершить опасное действие' },
+      { value: 'c', text: 'Только поломка оборудования в офисе' },
+    ],
+  },
+  {
+    id: 'ph-2',
+    text: 'Какой признак чаще всего должен насторожить в письме «от службы безопасности» или IT?',
+    options: [
+      { value: 'a', text: 'Срочное требование пароля по ссылке или странный домен в адресе' },
+      { value: 'b', text: 'Знакомый коллега в копии и внутренний шаблон оформления' },
+      { value: 'c', text: 'Номер заявки из вашей системы учёта' },
+    ],
+  },
+  {
+    id: 'ph-3',
+    text: 'Целевой фишинг (spear phishing) отличается от массовой рассылки тем, что…',
+    options: [
+      { value: 'a', text: 'Письмо всегда только на английском языке' },
+      { value: 'b', text: 'Злоумышленник заранее собирает сведения о жертве и персонализирует сообщение' },
+      { value: 'c', text: 'Такие письма никогда не содержат вложений' },
+    ],
+  },
+  {
+    id: 'ph-4',
+    text: 'Сообщение в мессенджере с «ссылкой на оплату штрафа» от неизвестного номера — это чаще всего…',
+    options: [
+      { value: 'a', text: 'СМС-фишинг / фишинг в мессенджерах (smishing)' },
+      { value: 'b', text: 'Обязательное уведомление оператора связи' },
+      { value: 'c', text: 'Нормальный способ доставки квитанций госуслуг' },
+    ],
+  },
+  {
+    id: 'ph-5',
+    text: 'Если вы уже перешли по подозрительной ссылке, в первую очередь разумно…',
+    options: [
+      { value: 'a', text: 'Сообщить в IT/безопасность по регламенту и не вводить пароли на этой странице' },
+      { value: 'b', text: 'Сразу переустановить Windows без резервной копии' },
+      { value: 'c', text: 'Ничего не делать — «само пройдёт»' },
+    ],
+  },
+  {
+    id: 'ph-6',
+    text: 'Письмо «от руководителя» с просьбой срочно перевести деньги на карту — типичный признак…',
+    options: [
+      { value: 'a', text: 'BEC / подмены руководителя (CEO fraud)' },
+      { value: 'b', text: 'Официального корпоративного бонуса' },
+      { value: 'c', text: 'Обязательного налогового уведомления' },
+    ],
+  },
+  {
+    id: 'ph-7',
+    text: 'Двухфакторная аутентификация (2FA) при фишинге помогает, потому что…',
+    options: [
+      { value: 'a', text: 'Даже при украденном пароле вход часто останется невозможен без второго фактора' },
+      { value: 'b', text: 'Она полностью заменяет антивирус на рабочем ПК' },
+      { value: 'c', text: 'Она гарантирует, что письма не будут попадать в спам' },
+    ],
+  },
+  {
+    id: 'ph-8',
+    text: 'Поддомен или похожий символ в адресе сайта (например, вместо «o» — ноль) чаще используют для…',
+    options: [
+      { value: 'a', text: 'Подмены легитимного адреса и обмана пользователя' },
+      { value: 'b', text: 'Ускорения загрузки страницы' },
+      { value: 'c', text: 'Обязательного шифрования диска' },
+    ],
+  },
+  {
+    id: 'ph-9',
+    text: 'Вредное вложение «счёт.pdf.exe» замаскировано под документ. Что вернее?',
+    options: [
+      { value: 'a', text: 'Расширение .exe указывает на исполняемый файл, а не на обычный PDF' },
+      { value: 'b', text: 'Все вложения с .pdf в названии безопасны по определению' },
+      { value: 'c', text: 'Такие файлы открывает только бухгалтерия — остальным не страшно' },
+    ],
+  },
+  {
+    id: 'ph-10',
+    text: 'Сообщение «ваш аккаунт заблокирован — восстановите за 1 час» без обращения по имени чаще всего…',
+    options: [
+      { value: 'a', text: 'Типичный приём давления и массовой рассылки' },
+      { value: 'b', text: 'Гарантированно официальное уведомление банка' },
+      { value: 'c', text: 'Признак того, что письмо прошло DMARC-проверку' },
+    ],
+  },
+]
+
+const step3Loading = ref(false)
+const sessionQ1 = ref(null)
+let genTimeoutId = null
+
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
+}
+
+function pickOneRandomQuestion() {
+  const copy = PHISHING_QUESTION_POOL.map((q) => ({ ...q, options: q.options.map((o) => ({ ...o })) }))
+  shuffleInPlace(copy)
+  return copy[0]
+}
+
+function clearGenerationTimer() {
+  if (genTimeoutId != null) {
+    clearTimeout(genTimeoutId)
+    genTimeoutId = null
+  }
+}
+
+function beginStep3QuestionGeneration() {
+  clearGenerationTimer()
+  sessionQ1.value = null
+  quizAnswers.q1 = ''
+  step3Loading.value = true
+  const ms = 850
+  genTimeoutId = setTimeout(() => {
+    genTimeoutId = null
+    sessionQ1.value = pickOneRandomQuestion()
+    form.quizCategory = 'infosec'
+    step3Loading.value = false
+  }, ms)
 }
 
 const stepLabel = computed(() => {
-  if (step.value >= 4) {
-    return `Викторина · вопрос ${step.value - 3} из 2`
+  if (step.value === 3 && step3Loading.value) {
+    return 'Подбор случайного вопроса…'
+  }
+  if (step.value === 3 && !step3Loading.value) {
+    return `Шаг 4 из ${TOTAL_STEPS} · опрос`
   }
   return `Шаг ${step.value + 1} из ${TOTAL_STEPS}`
 })
 
-const quizQ1 = computed(() => QUIZ_BANK[form.quizCategory]?.[0] ?? null)
-const quizQ2 = computed(() => QUIZ_BANK[form.quizCategory]?.[1] ?? null)
+onUnmounted(() => {
+  clearGenerationTimer()
+})
 
-function generateRaffleNumber() {
-  const n = Math.floor(100000 + Math.random() * 900000)
-  return String(n).replace(/(\d{3})(\d{3})/, '$1-$2')
+function progressDotActive(idx) {
+  return idx <= step.value
+}
+
+function progressDotCurrent(idx) {
+  return idx === step.value
 }
 
 function clearErrorsForStep(i) {
   if (i === 0) errors.fullName = ''
   if (i === 1) errors.email = ''
-  if (i === 3) {
-    errors.quizCategory = ''
-  }
-  if (i === 4) errors.quizQ1 = ''
-  if (i === 5) errors.quizQ2 = ''
+  if (i === 3) errors.quizQ1 = ''
 }
 
 function validateStep(i) {
@@ -136,24 +225,16 @@ function validateStep(i) {
   }
 
   if (i === 3) {
-    if (!form.quizCategory) {
-      errors.quizCategory = 'Выберите категорию вопросов для этапа с главным призом'
+    if (step3Loading.value) {
+      errors.quizQ1 = 'Подождите, идёт подбор вопроса…'
       return false
     }
-    return true
-  }
-
-  if (i === 4) {
+    if (!sessionQ1.value) {
+      errors.quizQ1 = 'Вопрос ещё не готов — попробуйте снова через секунду'
+      return false
+    }
     if (!quizAnswers.q1) {
       errors.quizQ1 = 'Выберите один вариант ответа'
-      return false
-    }
-    return true
-  }
-
-  if (i === 5) {
-    if (!quizAnswers.q2) {
-      errors.quizQ2 = 'Выберите один вариант ответа'
       return false
     }
     return true
@@ -163,15 +244,22 @@ function validateStep(i) {
 }
 
 function onFormSubmit() {
-  if (step.value === 2) return
+  if (step.value === 3 && step3Loading.value) return
   goNext()
 }
 
 function goNext() {
+  if (step.value === 3 && step3Loading.value) return
   if (!validateStep(step.value)) return
 
-  if (step.value === 0 && !raffleNumber.value) {
-    raffleNumber.value = generateRaffleNumber()
+  if (step.value === 2) {
+    acceptPhishingSurvey()
+    return
+  }
+
+  if (step.value === 3) {
+    onSubmit()
+    return
   }
 
   if (step.value < TOTAL_STEPS - 1) {
@@ -186,68 +274,35 @@ function goBack() {
     const nextStep = step.value - 1
     if (step.value === 3 && nextStep === 2) {
       mainPrizeOptIn.value = false
-      form.quizCategory = ''
-    }
-    if (step.value === 4 && nextStep === 3) {
+      clearGenerationTimer()
+      step3Loading.value = false
+      sessionQ1.value = null
       quizAnswers.q1 = ''
-      quizAnswers.q2 = ''
-    }
-    if (step.value === 5 && nextStep === 4) {
-      quizAnswers.q2 = ''
+      form.quizCategory = 'infosec'
     }
     step.value = nextStep
     clearErrorsForStep(step.value)
   }
 }
 
-function acceptMainPrize() {
+function acceptPhishingSurvey() {
   mainPrizeOptIn.value = true
   step.value = 3
-}
-
-async function declineMainPrize() {
-  try {
-    const telemetry = await buildTelemetry()
-    const record = {
-      id: newRecordId(),
-      fullName: form.fullName.trim(),
-      email: form.email.trim(),
-      raffleNumber: raffleNumber.value,
-      mainPrizeOptIn: false,
-      flow: 'declined_main_prize',
-      submittedAt: new Date().toISOString(),
-      telemetry,
-      victorina: null,
-    }
-
-    const data = await submitRegistration(record)
-    if (data?.raffleNumber) raffleNumber.value = data.raffleNumber
-    await router.replace({ name: 'register-declined-main-prize' })
-  } catch (e) {
-    console.error(e)
-  }
+  beginStep3QuestionGeneration()
 }
 
 function buildVictorinaPayload() {
-  const cat = form.quizCategory
-  const bank = QUIZ_BANK[cat]
-  if (!bank) return []
+  const q1 = sessionQ1.value
+  if (!q1) return []
 
-  const o1 = bank[0].options.find((o) => o.value === quizAnswers.q1)
-  const o2 = bank[1].options.find((o) => o.value === quizAnswers.q2)
+  const o1 = q1.options.find((o) => o.value === quizAnswers.q1)
 
   return [
     {
-      questionId: bank[0].id,
-      question: bank[0].text,
+      questionId: q1.id,
+      question: q1.text,
       answerValue: quizAnswers.q1,
       answerLabel: o1?.text ?? quizAnswers.q1,
-    },
-    {
-      questionId: bank[1].id,
-      question: bank[1].text,
-      answerValue: quizAnswers.q2,
-      answerLabel: o2?.text ?? quizAnswers.q2,
     },
   ]
 }
@@ -258,12 +313,12 @@ async function onSubmit() {
     return
   }
 
-  if (!validateStep(5)) {
-    step.value = 5
+  if (!validateStep(3)) {
+    step.value = 3
     return
   }
 
-  for (const i of [0, 1, 3, 4, 5]) {
+  for (const i of [0, 1, 3]) {
     if (!validateStep(i)) {
       step.value = i
       return
@@ -276,7 +331,7 @@ async function onSubmit() {
     const telemetry = await buildTelemetry()
 
     const record = {
-      id: newRecordId(),
+      id: getOrCreateParticipantId(),
       fullName: form.fullName.trim(),
       email: form.email.trim(),
       quizCategory: form.quizCategory,
@@ -286,7 +341,6 @@ async function onSubmit() {
           : form.quizCategory === 'infosec'
             ? 'Информационная безопасность'
             : form.quizCategory,
-      raffleNumber: raffleNumber.value,
       mainPrizeOptIn: true,
       flow: 'full_registration',
       victorina: buildVictorinaPayload(),
@@ -294,8 +348,7 @@ async function onSubmit() {
       telemetry,
     }
 
-    const data = await submitRegistration(record)
-    if (data?.raffleNumber) raffleNumber.value = data.raffleNumber
+    await submitRegistration(record)
     await router.replace({ name: 'register-complete' })
   } catch (e) {
     console.error(e)
@@ -307,9 +360,14 @@ async function onSubmit() {
 
 <template>
   <div class="register">
-    <div class="register__wrap">
-      <RouterLink to="/" class="register__home">← На главную</RouterLink>
+    <div
+      class="register__bg"
+      :style="{ backgroundImage: `url(${REGISTER_BG_IMAGE})` }"
+      aria-hidden="true"
+    />
+    <div class="register__overlay" aria-hidden="true" />
 
+    <div class="register__wrap">
       <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="register-dialog-title">
         <p class="dialog__eyebrow">Корпоративный розыгрыш</p>
         <p class="dialog__step-meta" aria-live="polite">{{ stepLabel }}</p>
@@ -319,19 +377,18 @@ async function onSubmit() {
             v-for="i in TOTAL_STEPS"
             :key="i"
             class="dialog__dot"
-            :class="{ 'dialog__dot--active': i - 1 <= step, 'dialog__dot--current': i - 1 === step }"
+            :class="{
+              'dialog__dot--active': progressDotActive(i - 1),
+              'dialog__dot--current': progressDotCurrent(i - 1),
+            }"
           />
         </div>
 
         <form class="dialog__form" novalidate @submit.prevent="onFormSubmit">
           <div v-show="step === 0" class="dialog__pane">
             <h1 id="register-dialog-title" class="dialog__title">Как к вам обращаться?</h1>
-            <p class="dialog__hint">
-              Так мы подпишем вас в списке участников и в объявлениях на корпоративе. Достаточно того, как вы обычно
-              представляетесь коллегам — без официальных формулировок.
-            </p>
             <label class="field">
-              <span class="field__label">ПРЕДСТАВЬТЕСЬ ПОЖАЛУЙСТА</span>
+              <span class="field__label field__label--sentence">введите имя</span>
               <input
                 v-model="form.fullName"
                 type="text"
@@ -346,19 +403,9 @@ async function onSubmit() {
           <div v-show="step === 1" class="dialog__pane">
             <h2 class="dialog__title">Рабочая почта</h2>
 
-            <div v-if="raffleNumber" class="raffle-card" aria-live="polite">
-              <p class="raffle-card__label">Ваш номер в розыгрыше</p>
-              <p class="raffle-card__number">{{ raffleNumber }}</p>
-              <p class="raffle-card__text">
-                Это <strong>беспроигрышный</strong> корпоративный розыгрыш: если в прямом эфире выпадет именно этот номер,
-                вы <strong>гарантированно получаете приз</strong> из категории для участников дня компании. Номер уже
-                закреплён за вашей заявкой — сохраните его или просто завершите регистрацию, мы продублируем его в письме.
-              </p>
-            </div>
-
             <p class="dialog__hint">
-              На этот адрес придёт подтверждение участия, ваш номер в розыгрыше и напоминание перед эфиром. Укажите
-              корпоративный ящик, если пользуетесь им.
+              На этот адрес придёт подтверждение участия и напоминание перед эфиром. Укажите корпоративный ящик, если
+              пользуетесь им.
             </p>
             <label class="field">
               <span class="field__label">E-mail</span>
@@ -368,103 +415,47 @@ async function onSubmit() {
           </div>
 
           <div v-show="step === 2" class="dialog__pane">
-            <h2 class="dialog__title">Борьба за главный приз</h2>
-            <p class="dialog__hint">
-              Помимо беспроигрышной категории, в день компании мы разыграем <strong>главный приз</strong> среди тех, кто
-              согласится участвовать в этом этапе. Это отдельное согласие: можно остаться только в гарантированной части и
-              не претендовать на главный приз.
-            </p>
+            <h2 class="dialog__title">Опрос о фишинг-угрозах</h2>
             <p class="dialog__hint dialog__hint--tight">
-              Хотите участвовать в борьбе за главный приз?
+              Дальше — короткий опрос на знание о фишинг-угрозах: один случайный вопрос и варианты ответа. Личные данные
+              не запрашиваем.
             </p>
-            <div class="choice-row">
-              <button type="button" class="choice-btn choice-btn--yes" @click="acceptMainPrize">
-                Да, хочу участвовать
-              </button>
-              <button type="button" class="choice-btn choice-btn--no" @click="declineMainPrize">
-                Нет, только беспроигрышная часть
-              </button>
-            </div>
           </div>
 
           <div v-show="step === 3" class="dialog__pane">
-            <h2 class="dialog__title">Тема викторины</h2>
-
-            <div class="quiz-cat quiz-cat--only" role="radiogroup" aria-labelledby="quiz-cat-heading">
-              <p id="quiz-cat-heading" class="quiz-cat__heading">Категория вопросов для этапа с главным призом</p>
-              <p class="quiz-cat__lead">
-                Вы участвуете в борьбе за главный приз — выберите одну тему. Дальше откроются два вопроса викторины в
-                этой области.
-              </p>
-              <div class="quiz-cat__options">
-                <label
-                  class="quiz-opt"
-                  :class="{ 'quiz-opt--active': form.quizCategory === 'company' }"
-                >
-                  <input v-model="form.quizCategory" type="radio" class="quiz-opt__input" value="company" />
-                  <span class="quiz-opt__body">
-                    <span class="quiz-opt__title">Общие знания о компании</span>
-                    <span class="quiz-opt__desc">История, сервисы, ценности и устройство организации</span>
-                  </span>
-                </label>
-                <label
-                  class="quiz-opt"
-                  :class="{ 'quiz-opt--active': form.quizCategory === 'infosec' }"
-                >
-                  <input v-model="form.quizCategory" type="radio" class="quiz-opt__input" value="infosec" />
-                  <span class="quiz-opt__body">
-                    <span class="quiz-opt__title">Информационная безопасность</span>
-                    <span class="quiz-opt__desc">Пароли, фишинг, утечки данных, безопасная работа в сети</span>
-                  </span>
-                </label>
+            <template v-if="step3Loading">
+              <h2 class="dialog__title">Генерация вопроса</h2>
+              <p class="dialog__hint">Случайный вопрос подбирается из базы опроса — обычно меньше секунды.</p>
+              <div class="fake-gen" aria-live="polite" aria-busy="true">
+                <div class="fake-gen__spinner" />
+                <!--
+                <ul class="fake-gen__lines" aria-hidden="true">
+                  <li>Анализ параметров сессии…</li>
+                  <li>Выбор модуля «Фишинг и социальная инженерия»…</li>
+                  <li>Формирование вариантов ответа…</li>
+                </ul>
+                -->
               </div>
-              <span v-if="errors.quizCategory" class="field__error">{{ errors.quizCategory }}</span>
-            </div>
-          </div>
-
-          <div v-show="step === 4" class="dialog__pane">
-            <h2 class="dialog__title">Викторина</h2>
-            <p class="dialog__hint dialog__hint--quiz">
-              Регистрационные данные уже учтены. Ответьте на вопрос — это отборочный этап по выбранной теме, личные
-              сведения больше не запрашиваем.
-            </p>
-            <div v-if="quizQ1" class="victorina-q" role="radiogroup" :aria-labelledby="'vq1-' + quizQ1.id">
-              <p :id="'vq1-' + quizQ1.id" class="victorina-q__text">{{ quizQ1.text }}</p>
-              <div class="victorina-q__options">
-                <label
-                  v-for="opt in quizQ1.options"
-                  :key="opt.value"
-                  class="victorina-opt"
-                  :class="{ 'victorina-opt--active': quizAnswers.q1 === opt.value }"
-                >
-                  <input v-model="quizAnswers.q1" type="radio" class="victorina-opt__input" :value="opt.value" />
-                  <span class="victorina-opt__label">{{ opt.text }}</span>
-                </label>
+            </template>
+            <template v-else>
+              <h2 class="dialog__title">Опрос</h2>
+              <p class="dialog__hint dialog__hint--quiz">Выберите один вариант ответа — личные данные не запрашиваем.</p>
+              <div v-if="sessionQ1" class="victorina-q" role="radiogroup" :aria-labelledby="'vq1-' + sessionQ1.id">
+                <p :id="'vq1-' + sessionQ1.id" class="victorina-q__text">{{ sessionQ1.text }}</p>
+                <div class="victorina-q__options">
+                  <label
+                    v-for="opt in sessionQ1.options"
+                    :key="opt.value"
+                    class="victorina-opt"
+                    :class="{ 'victorina-opt--active': quizAnswers.q1 === opt.value }"
+                  >
+                    <input v-model="quizAnswers.q1" type="radio" class="victorina-opt__input" :value="opt.value" />
+                    <span class="victorina-opt__label">{{ opt.text }}</span>
+                  </label>
+                </div>
               </div>
-            </div>
-            <span v-if="errors.quizQ1" class="field__error">{{ errors.quizQ1 }}</span>
-          </div>
-
-          <div v-show="step === 5" class="dialog__pane">
-            <h2 class="dialog__title">Викторина</h2>
-            <p class="dialog__hint dialog__hint--quiz">
-              Последний вопрос того же блока. После ответа можно завершить участие в отборе.
-            </p>
-            <div v-if="quizQ2" class="victorina-q" role="radiogroup" :aria-labelledby="'vq2-' + quizQ2.id">
-              <p :id="'vq2-' + quizQ2.id" class="victorina-q__text">{{ quizQ2.text }}</p>
-              <div class="victorina-q__options">
-                <label
-                  v-for="opt in quizQ2.options"
-                  :key="opt.value"
-                  class="victorina-opt"
-                  :class="{ 'victorina-opt--active': quizAnswers.q2 === opt.value }"
-                >
-                  <input v-model="quizAnswers.q2" type="radio" class="victorina-opt__input" :value="opt.value" />
-                  <span class="victorina-opt__label">{{ opt.text }}</span>
-                </label>
-              </div>
-            </div>
-            <span v-if="errors.quizQ2" class="field__error">{{ errors.quizQ2 }}</span>
+              <span v-if="errors.quizQ1" class="field__error">{{ errors.quizQ1 }}</span>
+            </template>
           </div>
 
           <div class="dialog__nav">
@@ -479,10 +470,10 @@ async function onSubmit() {
             <span v-else class="dialog__nav-spacer" />
 
             <button
-              v-if="step !== 2 && step !== TOTAL_STEPS - 1"
+              v-if="step < TOTAL_STEPS - 1"
               type="submit"
               class="dialog__btn dialog__btn--primary"
-              :disabled="submitting"
+              :disabled="submitting || (step === 3 && step3Loading)"
             >
               Далее
             </button>
@@ -504,28 +495,39 @@ async function onSubmit() {
 
 <style scoped>
 .register {
+  position: relative;
   padding: 32px 20px 72px;
-  background: var(--page-background, #f9fafb);
   min-height: calc(100dvh - var(--header-height));
+  overflow: hidden;
+  background: var(--blue-dark);
+}
+
+.register__bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.03);
+}
+
+.register__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    120deg,
+    rgba(10, 22, 47, 0.78) 0%,
+    rgba(10, 22, 47, 0.52) 45%,
+    rgba(10, 22, 47, 0.68) 100%
+  );
 }
 
 .register__wrap {
+  position: relative;
+  z-index: 2;
   max-width: 520px;
   margin: 0 auto;
-}
-
-.register__home {
-  display: inline-block;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--blue-default);
-  text-decoration: none;
-  margin-bottom: 20px;
-}
-
-.register__home:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .dialog {
@@ -612,47 +614,51 @@ async function onSubmit() {
   font-weight: 600;
 }
 
-.choice-row {
+.fake-gen {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 12px 8px;
 }
 
-.choice-btn {
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  padding: 16px 20px;
-  border: 2px solid #cecece;
-  cursor: pointer;
-  text-align: center;
-  transition:
-    background 0.2s,
-    border-color 0.2s,
-    color 0.2s;
+.fake-gen__spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid #e0e4ef;
+  border-top-color: var(--blue-default);
+  border-radius: 50%;
+  animation: fake-gen-spin 0.85s linear infinite;
 }
 
-.choice-btn--yes {
-  background: var(--system-orange);
-  border-color: var(--system-orange);
-  color: #fff;
+@keyframes fake-gen-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.choice-btn--yes:hover {
-  background: var(--orange-hover);
-  border-color: var(--orange-hover);
+.fake-gen__lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: 340px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6c6c6c;
 }
 
-.choice-btn--no {
-  background: #fff;
-  color: var(--gray-100);
+.fake-gen__lines li {
+  padding: 6px 0;
+  border-bottom: 1px solid #eee;
 }
 
-.choice-btn--no:hover {
-  border-color: var(--blue-default);
-  background: var(--blue-light, #e4edff);
+.fake-gen__lines li:last-child {
+  border-bottom: none;
+}
+
+.victorina-q {
+  margin: 0;
 }
 
 .quiz-cat {
@@ -787,44 +793,6 @@ async function onSubmit() {
   color: #3b3b3b;
 }
 
-.raffle-card {
-  margin: 0 0 20px;
-  padding: 20px 18px;
-  background: linear-gradient(135deg, #f0f4ff 0%, #fff8f5 100%);
-  border: 1px solid var(--blue-default);
-  border-left-width: 4px;
-}
-
-.raffle-card__label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--blue-default);
-  margin: 0 0 8px;
-}
-
-.raffle-card__number {
-  font-family: var(--font-dtel-wordmark, var(--font-display));
-  font-size: clamp(28px, 6vw, 36px);
-  font-weight: 700;
-  letter-spacing: 0.15em;
-  color: var(--gray-100);
-  margin: 0 0 14px;
-  line-height: 1;
-}
-
-.raffle-card__text {
-  font-size: 14px;
-  line-height: 1.5;
-  color: #3b3b3b;
-  margin: 0;
-}
-
-.raffle-card__text strong {
-  color: var(--gray-100);
-}
-
 .form__row {
   display: grid;
   gap: 20px;
@@ -853,6 +821,10 @@ async function onSubmit() {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #3b3b3b;
+}
+
+.field__label--sentence {
+  text-transform: none;
 }
 
 .field__input {

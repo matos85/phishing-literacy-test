@@ -25,6 +25,14 @@ const statements = [
     INDEX idx_reg_submitted (submitted_at),
     INDEX idx_reg_email (email(64))
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS site_visits (
+    id VARCHAR(36) PRIMARY KEY,
+    path VARCHAR(768) NOT NULL DEFAULT '/',
+    telemetry JSON NOT NULL,
+    opened_at DATETIME(3) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_visits_opened (opened_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ]
 
 async function ensureUniqueRaffleNumberIndex(pool) {

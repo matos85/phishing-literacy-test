@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getPool } from './db.mjs'
 import { verifyPassword } from './crypto-password.mjs'
+import { clientIpFromReq } from './client-ip.mjs'
 import {
   sessionCookieName,
   createSession,
@@ -28,6 +29,7 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
+  '.txt': 'text/plain; charset=utf-8',
 }
 
 function json(res, status, obj) {
@@ -74,6 +76,20 @@ function rowToApi(r) {
   }
 }
 
+function visitRowToApi(r) {
+  let telemetry = r.telemetry
+  if (telemetry == null) telemetry = {}
+  else if (typeof telemetry === 'string') telemetry = JSON.parse(telemetry)
+  let openedAt = r.opened_at
+  if (openedAt instanceof Date) openedAt = openedAt.toISOString()
+  return {
+    id: r.id,
+    path: r.path,
+    telemetry,
+    openedAt,
+  }
+}
+
 function getSessionToken(req) {
   const cookies = parseCookies(req.headers.cookie)
   return cookies[sessionCookieName] || null
@@ -86,10 +102,15 @@ function requireAuth(req) {
   return { token, login: s.login }
 }
 
-/** Формат как на клиенте: «123-456»; сервер назначает номер и гарантирует уникальность в БД. */
-function randomRaffleNumber() {
-  const n = Math.floor(100000 + Math.random() * 900000)
-  return String(n).replace(/(\d{3})(\d{3})/, '$1-$2')
+/** Порядковый номер участника: 1, 2, 3, … (по максимуму среди уже числовых значений в БД). */
+async function allocateNextRaffleNumber(conn) {
+  const [rows] = await conn.execute(
+    `SELECT COALESCE(MAX(CAST(raffle_number AS UNSIGNED)), 0) AS m
+     FROM registrations
+     WHERE raffle_number REGEXP '^[0-9]+$'`,
+  )
+  const next = Number(rows[0].m) + 1
+  return String(next)
 }
 
 async function handleApi(req, res, url) {
@@ -150,6 +171,53 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true })
   }
 
+  if (pathname === '/api/visits' && req.method === 'GET') {
+    const auth = requireAuth(req)
+    if (!auth) return json(res, 401, { error: 'Требуется вход' })
+    const pool = getPool()
+    const [rows] = await pool.execute('SELECT * FROM site_visits ORDER BY opened_at DESC')
+    return json(res, 200, { data: rows.map(visitRowToApi) })
+  }
+
+  if (pathname === '/api/visits' && req.method === 'DELETE') {
+    const auth = requireAuth(req)
+    if (!auth) return json(res, 401, { error: 'Требуется вход' })
+    const pool = getPool()
+    await pool.execute('DELETE FROM site_visits')
+    return json(res, 200, { ok: true })
+  }
+
+  if (pathname === '/api/visits' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
+    const id = String(body.id || '').trim()
+    if (!id) return json(res, 400, { error: 'Нужен id' })
+    const pathStr = String(body.path || '/').trim().slice(0, 768) || '/'
+    const telemetryClient = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : {}
+    const reqIp = clientIpFromReq(req)
+    const telemetryPayload = JSON.stringify({
+      ...telemetryClient,
+      ...(reqIp ? { requestIp: reqIp } : {}),
+    })
+    const openedAt = body.openedAt ? new Date(body.openedAt) : new Date()
+    if (Number.isNaN(openedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
+    const pool = getPool()
+    try {
+      await pool.execute(
+        `INSERT INTO site_visits (id, path, telemetry, opened_at) VALUES (?, ?, CAST(? AS JSON), ?)
+         ON DUPLICATE KEY UPDATE
+           path = VALUES(path),
+           telemetry = VALUES(telemetry),
+           opened_at = VALUES(opened_at)`,
+        [id, pathStr, telemetryPayload, openedAt],
+      )
+      return json(res, 200, { ok: true, id })
+    } catch (e) {
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка сохранения' })
+    }
+  }
+
   if (pathname === '/api/registrations' && req.method === 'POST') {
     const body = await readJsonBody(req)
     if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
@@ -162,7 +230,9 @@ async function handleApi(req, res, url) {
     if (!['full_registration', 'declined_main_prize'].includes(flow)) {
       return json(res, 400, { error: 'Некорректный flow' })
     }
-    const telemetry = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : { note: 'empty' }
+    const telemetryBase = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : { note: 'empty' }
+    const reqIp = clientIpFromReq(req)
+    const telemetry = { ...telemetryBase, ...(reqIp ? { requestIp: reqIp } : {}) }
     const victorina = body.victorina == null ? null : body.victorina
     const submittedAt = body.submittedAt ? new Date(body.submittedAt) : new Date()
     if (Number.isNaN(submittedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
@@ -173,37 +243,42 @@ async function handleApi(req, res, url) {
           quiz_category, quiz_category_label, victorina, telemetry, submitted_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`
 
-    const maxRaffleAttempts = 64
-    for (let attempt = 0; attempt < maxRaffleAttempts; attempt++) {
-      const raffleNumber = randomRaffleNumber()
-      try {
-        await pool.execute(insertSql, [
-          id,
-          fullName,
-          email,
-          raffleNumber,
-          body.mainPrizeOptIn ? 1 : 0,
-          flow,
-          body.quizCategory || null,
-          body.quizCategoryLabel || null,
-          victorina == null ? null : JSON.stringify(victorina),
-          JSON.stringify(telemetry),
-          submittedAt,
-        ])
-        return json(res, 201, { ok: true, id, raffleNumber })
-      } catch (e) {
-        if (e.code === 'ER_DUP_ENTRY') {
-          const msg = String(e.sqlMessage || '')
-          if (msg.includes('PRIMARY') || msg.includes(`'PRIMARY'`)) {
-            return json(res, 409, { error: 'Запись с таким id уже есть' })
-          }
-          continue
+    const conn = await pool.getConnection()
+    const lockName = 'pl_reg_raffle_seq'
+    try {
+      await conn.query('SELECT GET_LOCK(?, 20)', [lockName])
+      const raffleNumber = await allocateNextRaffleNumber(conn)
+      await conn.execute(insertSql, [
+        id,
+        fullName,
+        email,
+        raffleNumber,
+        body.mainPrizeOptIn ? 1 : 0,
+        flow,
+        body.quizCategory || null,
+        body.quizCategoryLabel || null,
+        victorina == null ? null : JSON.stringify(victorina),
+        JSON.stringify(telemetry),
+        submittedAt,
+      ])
+      return json(res, 201, { ok: true, id, raffleNumber })
+    } catch (e) {
+      if (e.code === 'ER_DUP_ENTRY') {
+        const msg = String(e.sqlMessage || '')
+        if (msg.includes('PRIMARY') || msg.includes(`'PRIMARY'`)) {
+          return json(res, 409, { error: 'Запись с таким id уже есть' })
         }
-        console.error(e)
-        return json(res, 500, { error: 'Ошибка сохранения' })
       }
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка сохранения' })
+    } finally {
+      try {
+        await conn.query('SELECT RELEASE_LOCK(?)', [lockName])
+      } catch {
+        /* ignore */
+      }
+      conn.release()
     }
-    return json(res, 503, { error: 'Не удалось назначить уникальный номер участника' })
   }
 
   return json(res, 404, { error: 'Not found' })

@@ -1,20 +1,13 @@
-<script setup>
-import { RouterLink } from 'vue-router'
-</script>
-
 <template>
   <div class="complete">
     <div class="complete__card">
       <div class="complete__icon" aria-hidden="true">✓</div>
       <h1 class="complete__title">Регистрация принята</h1>
       <p class="complete__text">
-        Вы в списке участников корпоративного розыгрыша, включая этап с главным призом. Ответы викторины сохранены.
-        Итоги и напоминания будут отправлены на указанный рабочий e-mail ближе к дню компании.
+        Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.
       </p>
-      <p class="complete__hint">
-        Если письма нет во «Входящих», проверьте папку «Спам» и корпоративный фильтр.
-      </p>
-      <RouterLink to="/" class="complete__btn">На главную</RouterLink>
+
+      <a href="https://dtel.ru/" class="complete__btn">На главную</a>
     </div>
   </div>
 </template>

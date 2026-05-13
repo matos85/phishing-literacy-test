@@ -1,10 +1,15 @@
 <script setup>
+/**
+ * Шапка по образцу newsite-front `app/components/Layout/Header/Header.vue`
+ * (сетка, отступы, логотип `icons:logo` → файл `public/icons/logo.svg`).
+ * Шрифты: TTBluescreens / TTFirsNeue / Manrope — локально (style.css + main.js).
+ */
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
+import DtelHeaderLogo from './DtelHeaderLogo.vue'
 
 const menuOpen = ref(false)
 
-/** Как на официальном сайте: те же пути, что у dtel.ru (поддомены — родные сервисы). */
 const topLinks = [
   { label: 'Контакты', href: 'https://dtel.ru/kontakty/' },
   { label: 'Новости', href: 'https://dtel.ru/news' },
@@ -51,31 +56,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header class="dtel-header">
-    <div class="dtel-header__top">
-      <div class="cell cell--brand">
-        <RouterLink to="/" class="brand" @click="closeMenu">
-          <svg
-            class="brand__mark"
-            width="38"
-            height="42"
-            viewBox="0 0 38 42"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <!-- Геометрическая «D»: вертикальная стойка + две наклонные плоскости -->
-            <path fill="currentColor" d="M3 4h9v34H3V4z" />
-            <path fill="currentColor" d="M12 4h2.2L31 10.5v6.2L14 9.2V4H12zm0 28.8V22.4l17-5.2v8.5L14.2 38H12v-5.2z" />
-          </svg>
-          <span class="brand__word">DTEL</span>
-        </RouterLink>
-      </div>
+  <header class="dtel-header header">
+    <div class="header__container">
+      <div class="header__top header-top">
+        <div class="header-top__home">
+          <RouterLink to="/register" class="header-top__home-link" @click="closeMenu">
+            <DtelHeaderLogo class="header-top__logo" />
+          </RouterLink>
+        </div>
 
-      <div class="cell cell--burger">
         <button
           type="button"
-          class="burger"
+          class="header-top__menu-button burger"
           :class="{ 'burger--open': menuOpen }"
           :aria-expanded="menuOpen"
           aria-controls="dtel-mobile-nav"
@@ -86,37 +78,52 @@ onUnmounted(() => {
           <span class="burger__bar" />
           <span class="burger__bar" />
         </button>
+
+        <a
+          :href="accountHref"
+          class="header-top__profile-button"
+          rel="noopener noreferrer"
+          aria-label="Личный кабинет"
+        >
+          <svg class="header-top__profile-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"
+            />
+          </svg>
+        </a>
+
+        <div class="header-top__navigation">
+          <div class="header-top__navigation-links">
+            <a
+              v-for="(l, i) in topLinks"
+              :key="l.label"
+              :href="l.href"
+              class="header-top__nav-link"
+              rel="noopener noreferrer"
+              :class="{ 'header-top__nav-link--sep': i > 0 }"
+            >
+              {{ l.label }}
+            </a>
+          </div>
+          <a :href="accountHref" class="header-top__nav-link header-top__nav-link--cabinet" rel="noopener noreferrer">
+            Личный кабинет
+          </a>
+        </div>
       </div>
 
-      <nav class="cell cell--mid" aria-label="Дополнительные разделы">
+      <nav class="header__bottom header-bottom" aria-label="Услуги">
         <a
-          v-for="(l, i) in topLinks"
+          v-for="l in primaryLinks"
           :key="l.label"
           :href="l.href"
-          class="mid-link"
+          class="header-bottom__link"
           rel="noopener noreferrer"
-          :class="{ 'mid-link--sep': i > 0 }"
         >
           {{ l.label }}
         </a>
       </nav>
-
-      <div class="cell cell--account">
-        <a :href="accountHref" class="account-link" rel="noopener noreferrer">Личный кабинет</a>
-      </div>
     </div>
-
-    <nav class="dtel-header__bottom" aria-label="Услуги">
-      <a
-        v-for="l in primaryLinks"
-        :key="l.label"
-        :href="l.href"
-        class="primary-link"
-        rel="noopener noreferrer"
-      >
-        {{ l.label }}
-      </a>
-    </nav>
 
     <div
       id="dtel-mobile-nav"
@@ -124,19 +131,8 @@ onUnmounted(() => {
       :class="{ 'mobile-drawer--open': menuOpen }"
       :aria-hidden="!menuOpen"
     >
-      <button
-        type="button"
-        class="mobile-drawer__backdrop"
-        tabindex="-1"
-        aria-label="Закрыть меню"
-        @click="closeMenu"
-      />
-      <div
-        class="mobile-drawer__panel"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="'Меню навигации'"
-      >
+      <button type="button" class="mobile-drawer__backdrop" tabindex="-1" aria-label="Закрыть меню" @click="closeMenu" />
+      <div class="mobile-drawer__panel" role="dialog" aria-modal="true" aria-label="Меню навигации">
         <nav class="mobile-drawer__nav" aria-label="Полное меню">
           <p class="mobile-drawer__title">Услуги</p>
           <a
@@ -181,108 +177,75 @@ onUnmounted(() => {
   z-index: 100;
   background: var(--dtel-header-bg);
   color: #fff;
-  font-family: var(--font-display);
+  font-family: TTBluescreens, TTFirsNeue, 'Manrope', system-ui, sans-serif;
 }
 
-.dtel-header__top {
-  display: flex;
-  align-items: stretch;
-  min-height: var(--header-top-row);
-  border-bottom: 1px solid var(--dtel-header-divider);
-}
-
-.cell {
-  display: flex;
-  align-items: center;
+.header__container {
+  max-width: var(--max-width, 1980px);
+  margin: 0 auto;
+  border-left: 1px solid var(--dtel-header-divider);
   border-right: 1px solid var(--dtel-header-divider);
 }
 
-.cell:last-child {
-  border-right: none;
+.header__top,
+.header__bottom {
+  display: grid;
+  justify-items: stretch;
+  align-items: stretch;
+  height: var(--header-top-row);
+  border-bottom: 1px solid var(--dtel-header-divider);
 }
 
-.cell--brand {
-  flex: 0 0 auto;
-  padding: 0 clamp(16px, 2vw, 28px);
+.header__top {
+  grid-template-areas: 'home menu navigation';
+  grid-template-columns: 231px 100px minmax(0, 1fr);
 }
 
-.cell--burger {
-  flex: 0 0 auto;
-  justify-content: center;
-  width: 56px;
-  padding: 0;
+.header__bottom {
+  grid-template-columns: repeat(6, 1fr);
+  height: var(--header-bottom-row);
 }
 
-.cell--mid {
-  flex: 1 1 auto;
-  justify-content: center;
-  gap: 0;
-  min-width: 0;
-  flex-wrap: wrap;
-  padding: 8px 12px;
+.header-top,
+.header-bottom {
+  box-sizing: border-box;
 }
 
-.cell--account {
-  flex: 0 0 auto;
-  justify-content: center;
-  padding: 0 clamp(16px, 2vw, 28px);
+.header-top > *,
+.header-bottom > * {
+  width: 100%;
+  height: 100%;
 }
 
-.brand {
+.header-top > :not(:last-child),
+.header-bottom > :not(:last-child) {
+  border-right: 1px solid var(--dtel-header-divider);
+}
+
+.header-top__home {
+  grid-area: home;
+  display: flex;
+  align-items: center;
+  padding-left: var(--offset-side-desktop, 40px);
+}
+
+.header-top__home-link {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.header-top__logo {
+  display: block;
   color: #fff;
+  height: 26px;
+  width: auto;
+  max-width: min(151px, 46vw);
 }
 
-.brand__mark {
-  flex-shrink: 0;
-  color: #fff;
-}
-
-.brand__word {
-  font-family: var(--font-dtel-wordmark);
-  font-weight: 600;
-  font-size: clamp(17px, 1.35vw, 21px);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  line-height: 1;
-}
-
-.mid-link {
-  font-weight: 600;
-  font-size: clamp(11px, 1vw, 13px);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #fff;
-  padding: 8px clamp(14px, 1.8vw, 28px);
-  white-space: nowrap;
-  transition: opacity 0.15s;
-}
-
-.mid-link:hover {
-  opacity: 0.82;
-}
-
-.mid-link--sep {
-  border-left: 1px solid var(--dtel-header-divider);
-}
-
-.account-link {
-  font-weight: 600;
-  font-size: clamp(11px, 1vw, 13px);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #fff;
-  white-space: nowrap;
-  transition: opacity 0.15s;
-}
-
-.account-link:hover {
-  opacity: 0.82;
-}
-
-.burger {
+.header-top__menu-button {
+  grid-area: menu;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -290,8 +253,11 @@ onUnmounted(() => {
   gap: 5px;
   width: 100%;
   height: 100%;
-  min-height: var(--header-top-row);
   padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
 }
 
 .burger__bar {
@@ -317,37 +283,79 @@ onUnmounted(() => {
   transform: translateY(-7px) rotate(-45deg);
 }
 
-.dtel-header__bottom {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  align-items: stretch;
-  min-height: var(--header-bottom-row);
+.header-top__navigation {
+  grid-area: navigation;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 50px;
+  padding: 0 50px;
 }
 
-.primary-link {
+.header-top__navigation-links {
+  display: flex;
+  align-items: center;
+  gap: 50px;
+}
+
+.header-top__nav-link {
+  font-weight: 600;
+  font-size: clamp(11px, 1vw, 13px);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #fff;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.header-top__nav-link:hover {
+  opacity: 0.82;
+}
+
+.header-top__nav-link--sep {
+  border-left: 1px solid var(--dtel-header-divider);
+  padding-left: 50px;
+  margin-left: -50px;
+}
+
+.header-top__nav-link--cabinet {
+  flex-shrink: 0;
+}
+
+.header-top__profile-button {
+  grid-area: profile;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.header-top__profile-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.header-bottom__link {
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
   font-weight: 600;
   font-size: clamp(11px, 1vw, 13px);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: #fff;
-  border-right: 1px solid var(--dtel-header-divider);
+  text-decoration: none;
   padding: 10px 6px;
   transition: background 0.15s, opacity 0.15s;
 }
 
-.primary-link:last-child {
-  border-right: none;
-}
-
-.primary-link:hover {
+.header-bottom__link:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* Оверлей меню — как на dtel.ru: бургер на всех ширинах, панель по клику */
 .mobile-drawer {
   display: flex;
   position: fixed;
@@ -418,6 +426,7 @@ onUnmounted(() => {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #fff;
+  text-decoration: none;
   padding: 14px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
@@ -428,39 +437,54 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1024px) {
-  .cell--mid,
-  .cell--account {
-    display: none;
+  .header__top {
+    grid-template-areas: 'home profile menu';
+    grid-template-columns: minmax(180px, auto) minmax(0, 80px) minmax(0, 80px);
+    height: var(--header-top-row);
   }
 
-  .cell--burger {
-    border-right: none;
-    border-left: 1px solid var(--dtel-header-divider);
-  }
-
-  .dtel-header__top {
-    justify-content: space-between;
-  }
-
-  .cell--brand {
-    border-right: none;
-    flex: 1 1 auto;
-  }
-
-  .dtel-header__bottom {
+  .header__bottom {
     display: flex;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scroll-snap-type: x proximity;
-    border-bottom: 1px solid var(--dtel-header-divider);
   }
 
-  .primary-link {
+  .header-bottom__link {
     flex: 0 0 auto;
     min-width: 44vw;
     max-width: 200px;
     border-right: 1px solid var(--dtel-header-divider);
     scroll-snap-align: start;
+  }
+
+  .header-top__home {
+    padding-left: var(--offset-side-tablet, 30px);
+  }
+
+  .header-top__navigation {
+    display: none;
+  }
+
+  .header-top__profile-button {
+    display: flex;
+    border-right: 1px solid var(--dtel-header-divider);
+  }
+
+  .header-top__menu-button {
+    border-right: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .header__top {
+    grid-template-columns: minmax(180px, auto) minmax(0, 70px) minmax(0, 70px);
+  }
+}
+
+@media (max-width: 480px) {
+  .header-top__home {
+    padding-left: var(--offset-side-mobile, 12px);
   }
 }
 </style>

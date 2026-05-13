@@ -33,3 +33,17 @@ export async function clearRegistrations() {
   if (!res.ok) throw new Error(data.error || res.statusText)
   return data
 }
+
+export async function fetchSiteVisits() {
+  const res = await fetch('/api/visits', { credentials: 'include' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || res.statusText)
+  return data.data || []
+}
+
+export async function clearSiteVisits() {
+  const res = await fetch('/api/visits', { method: 'DELETE', credentials: 'include' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || res.statusText)
+  return data
+}

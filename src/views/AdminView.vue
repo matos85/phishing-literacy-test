@@ -2,14 +2,16 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import { RouterLink } from 'vue-router'
-import { authLogin, fetchRegistrations, clearRegistrations } from '../lib/apiAdmin'
+import { authLogin, fetchRegistrations, clearRegistrations, fetchSiteVisits, clearSiteVisits } from '../lib/apiAdmin'
 import { adminLoggedIn, syncAdminSession } from '../composables/useAdminSession'
+import { formatAdminWhen, registrationFlowLabel } from '../lib/adminFormat'
 
 const loginInput = ref('')
 const passwordInput = ref('')
 const authError = ref('')
 const listError = ref('')
 const rows = ref([])
+const visitRows = ref([])
 const expandedId = ref(null)
 
 const POLL_MS = 8000
@@ -27,23 +29,60 @@ function stopPoll() {
   }
 }
 
-const sortedRows = computed(() => {
-  const list = [...rows.value]
-  list.sort((a, b) => {
-    const ta = new Date(a.submittedAt || 0).getTime()
-    const tb = new Date(b.submittedAt || 0).getTime()
-    return tb - ta
-  })
+/** Одна строка = id сессии: открытие сайта и заявка с тем же id сливаются. */
+const mergedSessions = computed(() => {
+  const map = new Map()
+  for (const v of visitRows.value) {
+    if (!v?.id) continue
+    map.set(v.id, { id: v.id, visit: v, registration: null })
+  }
+  for (const r of rows.value) {
+    if (!r?.id) continue
+    const cur = map.get(r.id)
+    if (cur) cur.registration = r
+    else map.set(r.id, { id: r.id, visit: null, registration: r })
+  }
+  const list = [...map.values()]
+  list.sort((a, b) => sessionLatestAtMs(b) - sessionLatestAtMs(a))
   return list
 })
+
+function sessionLatestAtMs(s) {
+  const tVisit = s.visit?.openedAt ? new Date(s.visit.openedAt).getTime() : 0
+  const tReg = s.registration?.submittedAt ? new Date(s.registration.submittedAt).getTime() : 0
+  return Math.max(tVisit, tReg)
+}
+
+function sessionLatestIso(s) {
+  const ms = sessionLatestAtMs(s)
+  return ms ? new Date(ms).toISOString() : ''
+}
+
+function sessionStatusLabel(s) {
+  if (s.visit && s.registration) return 'Визит и заявка'
+  if (s.registration) return 'Только заявка'
+  return 'Только визит'
+}
+
+/** В таблице и в «Технических данных» — одна телеметрия: с заявки, если есть, иначе с визита. */
+function sessionTelemetry(s) {
+  return s.registration?.telemetry || s.visit?.telemetry || null
+}
+
+function sessionIp(s) {
+  return visitIp(sessionTelemetry(s))
+}
 
 async function refresh() {
   listError.value = ''
   try {
-    rows.value = await fetchRegistrations()
+    const [regData, visitData] = await Promise.all([fetchRegistrations(), fetchSiteVisits()])
+    rows.value = regData
+    visitRows.value = visitData
   } catch (e) {
-    listError.value = e.message || 'Не удалось загрузить список'
+    listError.value = e.message || 'Не удалось загрузить данные'
     rows.value = []
+    visitRows.value = []
   }
 }
 
@@ -62,57 +101,58 @@ function toggleExpand(id) {
   expandedId.value = expandedId.value === id ? null : id
 }
 
-function rowKey(row) {
-  return row.id
-}
-
-function formatWhen(iso) {
-  if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    return d.toLocaleString('ru-RU', {
-      dateStyle: 'short',
-      timeStyle: 'medium',
-    })
-  } catch {
-    return iso
-  }
-}
-
-function flowLabel(flow) {
-  if (flow === 'full_registration') return 'Полная регистрация'
-  if (flow === 'declined_main_prize') return 'Отказ от главного приза'
-  return flow || '—'
+function visitIp(t) {
+  if (!t || typeof t !== 'object') return '—'
+  return t.ip || '—'
 }
 
 function exportExcel() {
-  const data = sortedRows.value.map((r) => ({
-    Время: formatWhen(r.submittedAt),
-    Имя: r.fullName || '',
-    'E-mail': r.email || '',
-    Сценарий: flowLabel(r.flow),
-    'Номер розыгрыша': r.raffleNumber || '',
-    'Главный приз': r.mainPrizeOptIn ? 'да' : 'нет',
-    IP: r.telemetry?.ip || '',
-    'User-Agent': r.telemetry?.userAgent || '',
-    Язык: r.telemetry?.language || '',
-    'Часовой пояс': r.telemetry?.timezone || '',
-    Referrer: r.telemetry?.referrer || '',
-    'Дата (ISO)': r.submittedAt || '',
-  }))
-  const ws = XLSX.utils.json_to_sheet(data)
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Заявки')
-  XLSX.writeFile(wb, `registrations-${Date.now()}.xlsx`)
+  const sheet = XLSX.utils.json_to_sheet(
+    mergedSessions.value.map((s) => {
+      const v = s.visit
+      const r = s.registration
+      return {
+        id: s.id,
+        Статус: sessionStatusLabel(s),
+        'Открытие (время)': v ? formatAdminWhen(v.openedAt) : '',
+        Путь: v?.path || '',
+        'Заявка (время)': r ? formatAdminWhen(r.submittedAt) : '',
+        Имя: r?.fullName || '',
+        'E-mail': r?.email || '',
+        Сценарий: r ? registrationFlowLabel(r.flow) : '',
+        Номер: r?.raffleNumber || '',
+        'Опрос (фишинг)': r ? (r.mainPrizeOptIn ? 'да' : 'нет') : '',
+        'IP (клиент)': sessionTelemetry(s)?.ip || '',
+        'User-Agent': sessionTelemetry(s)?.userAgent || '',
+        'Часовой пояс': sessionTelemetry(s)?.timezone || '',
+        'Платформа': sessionTelemetry(s)?.platform || '',
+        'Открытие ISO': v?.openedAt || '',
+        'Заявка ISO': r?.submittedAt || '',
+      }
+    }),
+  )
+  XLSX.utils.book_append_sheet(wb, sheet, 'Журнал')
+  XLSX.writeFile(wb, `admin-export-${Date.now()}.xlsx`)
 }
 
-async function clearAll() {
-  if (!window.confirm('Удалить все заявки в базе?')) return
+async function clearRegistrationsOnly() {
+  if (!window.confirm('Удалить все заявки (регистрации)? Журнал посещений не трогаем.')) return
   try {
     await clearRegistrations()
     await refresh()
   } catch (e) {
-    listError.value = e.message || 'Ошибка очистки'
+    listError.value = e.message || 'Ошибка очистки заявок'
+  }
+}
+
+async function clearVisitsOnly() {
+  if (!window.confirm('Удалить весь журнал открытий сайта? Заявки не трогаем.')) return
+  try {
+    await clearSiteVisits()
+    await refresh()
+  } catch (e) {
+    listError.value = e.message || 'Ошибка очистки журнала'
   }
 }
 
@@ -125,6 +165,7 @@ watch(
     } else {
       stopPoll()
       rows.value = []
+      visitRows.value = []
     }
   },
   { immediate: true },
@@ -142,7 +183,7 @@ onUnmounted(() => {
 <template>
   <div class="admin">
     <div class="admin__wrap">
-      <RouterLink to="/" class="admin__home">← На главную</RouterLink>
+      <RouterLink to="/register" class="admin__home">← К регистрации</RouterLink>
 
       <template v-if="!adminLoggedIn">
         <div class="card">
@@ -180,93 +221,121 @@ onUnmounted(() => {
       <template v-else>
         <header class="admin__toolbar">
           <div>
-            <h1 class="admin__title">Заявки</h1>
-            <p class="admin__meta">Записей: {{ sortedRows.length }} · MySQL через API</p>
+            <h1 class="admin__title">Панель</h1>
+            <p class="admin__meta">
+              Записей в журнале: {{ mergedSessions.length }} (визитов: {{ visitRows.length }}, заявок:
+              {{ rows.length }})
+            </p>
             <p v-if="listError" class="field__error">{{ listError }}</p>
           </div>
           <div class="admin__actions">
             <button type="button" class="btn btn--ghost" @click="refresh">Обновить</button>
             <button type="button" class="btn btn--ghost" @click="exportExcel">Экспорт Excel</button>
-            <button type="button" class="btn btn--danger" @click="clearAll">Очистить</button>
+            <button type="button" class="btn btn--danger" @click="clearRegistrationsOnly">Очистить заявки</button>
+            <button type="button" class="btn btn--danger" @click="clearVisitsOnly">Очистить визиты</button>
           </div>
         </header>
 
-        <div v-if="sortedRows.length === 0" class="card card--empty">
-          Пока нет завершённых регистраций. Похоже, единственный, кто попался на эту фишинговую форму, —
-          вы сами, когда проверяли, что всё «просто работает».
+        <div v-if="mergedSessions.length === 0" class="card card--empty">
+          Записей пока нет — не было открытий с телеметрией или заявок, либо база пуста.
         </div>
 
         <div v-else class="table-wrap">
           <table class="table">
             <thead>
               <tr>
-                <th>Время (UTC в данных)</th>
+                <th>Последнее событие</th>
+                <th>Статус</th>
+                <th>Путь</th>
                 <th>Имя</th>
                 <th>E-mail</th>
-                <th>Сценарий</th>
                 <th>IP</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              <template v-for="row in sortedRows" :key="rowKey(row)">
-                <tr class="table__row" @click="toggleExpand(rowKey(row))">
-                  <td>{{ formatWhen(row.submittedAt) }}</td>
-                  <td>{{ row.fullName || '—' }}</td>
-                  <td class="table__mono">{{ row.email || '—' }}</td>
-                  <td>{{ flowLabel(row.flow) }}</td>
-                  <td class="table__mono">{{ row.telemetry?.ip || '—' }}</td>
-                  <td class="table__toggle">{{ expandedId === rowKey(row) ? '▼' : '▶' }}</td>
+              <template v-for="s in mergedSessions" :key="s.id">
+                <tr class="table__row" @click="toggleExpand(s.id)">
+                  <td>{{ formatAdminWhen(sessionLatestIso(s)) }}</td>
+                  <td>{{ sessionStatusLabel(s) }}</td>
+                  <td class="table__mono">{{ s.visit?.path || '—' }}</td>
+                  <td>{{ s.registration?.fullName || '—' }}</td>
+                  <td class="table__mono">{{ s.registration?.email || '—' }}</td>
+                  <td class="table__mono">{{ sessionIp(s) }}</td>
+                  <td class="table__toggle">{{ expandedId === s.id ? '▼' : '▶' }}</td>
                 </tr>
-                <tr
-                  v-if="expandedId === rowKey(row)"
-                  class="table__detail"
-                >
-                  <td colspan="6">
+                <tr v-if="expandedId === s.id" class="table__detail">
+                  <td colspan="7">
                     <div class="detail">
-                      <section v-if="row.raffleNumber" class="detail__block">
-                        <h3 class="detail__h">Розыгрыш</h3>
-                        <p>Номер: <strong>{{ row.raffleNumber }}</strong></p>
-                        <p>Главный приз: {{ row.mainPrizeOptIn ? 'да' : 'нет' }}</p>
-                        <p v-if="row.quizCategoryLabel">Категория викторины: {{ row.quizCategoryLabel }}</p>
+                      <p class="detail__idline">
+                        <strong>id сессии</strong> (общий ключ визита и заявки, если оба события есть):
+                        <span class="detail__mono">{{ s.id }}</span>
+                      </p>
+
+                      <section v-if="s.visit || s.registration" class="detail__block">
+                        <h3 class="detail__h">Событие</h3>
+                        <p v-if="!s.visit && s.registration" class="detail__muted">
+                          В базе сохранена заявка с этим id; в журнале открытий сайта строки с тем же id нет (часто у старых
+                          заявок, при открытии в другой вкладке или если визит не отправился на сервер).
+                        </p>
+                        <p v-if="s.visit && !s.registration" class="detail__muted">
+                          В журнале визитов есть открытие с этим id; заявки с тем же id нет — форма не отправлялась.
+                        </p>
+                        <template v-if="s.visit">
+                          <p><strong>Открытие:</strong> {{ formatAdminWhen(s.visit.openedAt) }}</p>
+                          <p>
+                            <strong>Путь:</strong> <span class="detail__mono">{{ s.visit.path }}</span>
+                          </p>
+                        </template>
+                        <template v-if="s.registration">
+                          <p><strong>Заявка:</strong> {{ formatAdminWhen(s.registration.submittedAt) }}</p>
+                          <p><strong>Сценарий:</strong> {{ registrationFlowLabel(s.registration.flow) }}</p>
+                          <p><strong>Имя:</strong> {{ s.registration.fullName }}</p>
+                          <p>
+                            <strong>E-mail:</strong> <span class="detail__mono">{{ s.registration.email }}</span>
+                          </p>
+                          <template v-if="s.registration.raffleNumber">
+                            <p>
+                              <strong>Участие:</strong> номер <strong>{{ s.registration.raffleNumber }}</strong>,
+                              опрос (фишинг): {{ s.registration.mainPrizeOptIn ? 'да' : 'нет' }}
+                            </p>
+                          </template>
+                          <template v-if="s.registration.victorina?.length">
+                            <h4 class="detail__subh">Ответ опроса</h4>
+                            <ol class="detail__ol">
+                              <li v-for="(v, i) in s.registration.victorina" :key="i" class="detail__qa">
+                                <p class="detail__q">{{ v.question }}</p>
+                                <p class="detail__a">
+                                  <span class="detail__badge">{{ v.answerValue }}</span>
+                                  {{ v.answerLabel }}
+                                </p>
+                              </li>
+                            </ol>
+                          </template>
+                          <p v-else-if="s.registration.flow === 'declined_main_prize'" class="detail__muted">
+                            Опрос не проходился (ранний выход из сценария).
+                          </p>
+                        </template>
                       </section>
-                      <section class="detail__block">
+
+                      <section v-if="sessionTelemetry(s)" class="detail__block">
                         <h3 class="detail__h">Технические данные</h3>
+                        <p v-if="s.visit && s.registration" class="detail__muted">
+                          Снимок на момент отправки заявки (для визита без заявки — на момент открытия).
+                        </p>
                         <dl class="detail__dl">
-                          <dt>IP</dt>
-                          <dd>{{ row.telemetry?.ip || '—' }}</dd>
-                          <dt>Время отправки (ISO)</dt>
-                          <dd class="detail__mono">{{ row.submittedAt }}</dd>
+                          <dt>IP (клиент, ipify)</dt>
+                          <dd>{{ sessionTelemetry(s)?.ip || '—' }}</dd>
                           <dt>User-Agent</dt>
-                          <dd class="detail__mono">{{ row.telemetry?.userAgent || '—' }}</dd>
-                          <dt>Язык</dt>
-                          <dd>{{ row.telemetry?.language }} {{ row.telemetry?.languages?.length ? `(${row.telemetry.languages.join(', ')})` : '' }}</dd>
+                          <dd class="detail__mono">{{ sessionTelemetry(s)?.userAgent || '—' }}</dd>
                           <dt>Платформа</dt>
-                          <dd>{{ row.telemetry?.platform || '—' }}</dd>
-                          <dt>Экран</dt>
-                          <dd>{{ row.telemetry?.screen || '—' }}</dd>
-                          <dt>Окно</dt>
-                          <dd>{{ row.telemetry?.viewport || '—' }}</dd>
+                          <dd>{{ sessionTelemetry(s)?.platform || '—' }}</dd>
                           <dt>Часовой пояс</dt>
-                          <dd>{{ row.telemetry?.timezone || '—' }}</dd>
-                          <dt>Referrer</dt>
-                          <dd class="detail__mono">{{ row.telemetry?.referrer || '—' }}</dd>
+                          <dd>{{ sessionTelemetry(s)?.timezone || '—' }}</dd>
                         </dl>
                       </section>
-                      <section v-if="row.victorina?.length" class="detail__block">
-                        <h3 class="detail__h">Ответы викторины</h3>
-                        <ol class="detail__ol">
-                          <li v-for="(v, i) in row.victorina" :key="i" class="detail__qa">
-                            <p class="detail__q">{{ v.question }}</p>
-                            <p class="detail__a">
-                              <span class="detail__badge">{{ v.answerValue }}</span>
-                              {{ v.answerLabel }}
-                            </p>
-                          </li>
-                        </ol>
-                      </section>
-                      <section v-else-if="row.flow === 'declined_main_prize'" class="detail__block">
-                        <p class="detail__muted">Викторина не заполнялась (ранний выход из сценария).</p>
+                      <section v-else class="detail__block">
+                        <p class="detail__muted">Телеметрия не сохранена.</p>
                       </section>
                     </div>
                   </td>
@@ -345,7 +414,7 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .admin__actions {
@@ -508,6 +577,19 @@ onUnmounted(() => {
   text-transform: uppercase;
   color: var(--blue-default);
   margin: 0 0 10px;
+}
+
+.detail__subh {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 14px 0 8px;
+  color: var(--gray-100);
+}
+
+.detail__idline {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: #3b3b3b;
 }
 
 .detail__block p {

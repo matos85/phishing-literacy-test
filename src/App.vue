@@ -4,9 +4,11 @@ import AppHeader from './components/AppHeader.vue'
 import AdminSessionBar from './components/AdminSessionBar.vue'
 import { RouterView } from 'vue-router'
 import { adminLoggedIn, syncAdminSession } from './composables/useAdminSession'
+import { logSiteVisit } from './lib/visitLog'
 
 onMounted(() => {
   syncAdminSession()
+  void logSiteVisit()
 })
 </script>
 
