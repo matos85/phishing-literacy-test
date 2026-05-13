@@ -10,7 +10,9 @@
     "start": "node server/server.mjs",
     "db:wait": "node server/wait-db.mjs",
     "db:migrate": "node server/migrate.mjs",
-    "db:seed": "node server/seed.mjs"
+    "db:seed": "node server/seed.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "mysql2": "^3.14.0",
@@ -19,6 +21,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "@vitejs/plugin-vue": "^6.0.6",
     "vite": "^8.0.10"
   }

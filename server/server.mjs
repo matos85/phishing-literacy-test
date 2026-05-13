@@ -90,6 +90,24 @@ function visitRowToApi(r) {
   }
 }
 
+function sessionEventRowToApi(r) {
+  let meta = r.meta
+  if (meta == null) meta = null
+  else if (typeof meta === 'string') meta = JSON.parse(meta)
+  let occurredAt = r.occurred_at
+  if (occurredAt instanceof Date) occurredAt = occurredAt.toISOString()
+  return {
+    id: Number(r.id),
+    participantId: r.participant_id,
+    occurredAt,
+    kind: r.kind,
+    path: r.path,
+    stepIndex: r.step_index == null ? null : Number(r.step_index),
+    label: r.label,
+    meta,
+  }
+}
+
 function getSessionToken(req) {
   const cookies = parseCookies(req.headers.cookie)
   return cookies[sessionCookieName] || null
@@ -184,6 +202,7 @@ async function handleApi(req, res, url) {
     if (!auth) return json(res, 401, { error: 'Требуется вход' })
     const pool = getPool()
     await pool.execute('DELETE FROM site_visits')
+    await pool.execute('DELETE FROM session_events')
     return json(res, 200, { ok: true })
   }
 
@@ -212,6 +231,64 @@ async function handleApi(req, res, url) {
         [id, pathStr, telemetryPayload, openedAt],
       )
       return json(res, 200, { ok: true, id })
+    } catch (e) {
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка сохранения' })
+    }
+  }
+
+  if (pathname === '/api/session-events' && req.method === 'GET') {
+    const auth = requireAuth(req)
+    if (!auth) return json(res, 401, { error: 'Требуется вход' })
+    const pool = getPool()
+    const [rows] = await pool.execute(
+      'SELECT * FROM session_events ORDER BY occurred_at DESC LIMIT 20000',
+    )
+    return json(res, 200, { data: rows.map(sessionEventRowToApi) })
+  }
+
+  if (pathname === '/api/session-events' && req.method === 'DELETE') {
+    const auth = requireAuth(req)
+    if (!auth) return json(res, 401, { error: 'Требуется вход' })
+    const pool = getPool()
+    await pool.execute('DELETE FROM session_events')
+    return json(res, 200, { ok: true })
+  }
+
+  if (pathname === '/api/session-events' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
+    const participantId = String(body.participantId || '').trim()
+    if (!participantId || participantId.length > 64) {
+      return json(res, 400, { error: 'Некорректный participantId' })
+    }
+    const kind = String(body.kind || '').trim().slice(0, 40)
+    if (!kind) return json(res, 400, { error: 'Нужен kind' })
+    const pathStr = body.path != null ? String(body.path).trim().slice(0, 768) : null
+    const label = body.label != null ? String(body.label).trim().slice(0, 512) : null
+    let stepIndex = body.stepIndex
+    if (stepIndex != null && stepIndex !== '') {
+      stepIndex = Number(stepIndex)
+      if (!Number.isFinite(stepIndex) || stepIndex < -32768 || stepIndex > 32767) {
+        return json(res, 400, { error: 'Некорректный stepIndex' })
+      }
+    } else {
+      stepIndex = null
+    }
+    let metaJson = null
+    if (body.meta != null && typeof body.meta === 'object') {
+      metaJson = JSON.stringify(body.meta)
+    }
+    const occurredAt = body.occurredAt ? new Date(body.occurredAt) : new Date()
+    if (Number.isNaN(occurredAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
+    const pool = getPool()
+    try {
+      await pool.execute(
+        `INSERT INTO session_events (participant_id, occurred_at, kind, path, step_index, label, meta)
+         VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
+        [participantId, occurredAt, kind, pathStr || null, stepIndex, label || null, metaJson || 'null'],
+      )
+      return json(res, 201, { ok: true })
     } catch (e) {
       console.error(e)
       return json(res, 500, { error: 'Ошибка сохранения' })

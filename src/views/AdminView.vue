@@ -2,9 +2,9 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import { RouterLink } from 'vue-router'
-import { authLogin, fetchRegistrations, clearRegistrations, fetchSiteVisits, clearSiteVisits } from '../lib/apiAdmin'
+import { authLogin, fetchRegistrations, clearRegistrations, fetchSiteVisits, clearSiteVisits, fetchSessionEvents } from '../lib/apiAdmin'
 import { adminLoggedIn, syncAdminSession } from '../composables/useAdminSession'
-import { formatAdminWhen, registrationFlowLabel } from '../lib/adminFormat'
+import { formatAdminWhen, registrationFlowLabel, sessionEventKindLabel, formatStepDataMetaKey } from '../lib/adminFormat'
 
 const loginInput = ref('')
 const passwordInput = ref('')
@@ -12,7 +12,11 @@ const authError = ref('')
 const listError = ref('')
 const rows = ref([])
 const visitRows = ref([])
+const eventRows = ref([])
 const expandedId = ref(null)
+
+/** Включено по умолчанию: не показывать URL/маршруты и не выгружать их в Excel. */
+const hidePageDetails = ref(true)
 
 const POLL_MS = 8000
 let pollTimer = null
@@ -29,7 +33,7 @@ function stopPoll() {
   }
 }
 
-/** Одна строка = id сессии: открытие сайта и заявка с тем же id сливаются. */
+/** Одна строка = id сессии: визит, заявка и события с тем же participant id сливаются. */
 const mergedSessions = computed(() => {
   const map = new Map()
   for (const v of visitRows.value) {
@@ -42,15 +46,52 @@ const mergedSessions = computed(() => {
     if (cur) cur.registration = r
     else map.set(r.id, { id: r.id, visit: null, registration: r })
   }
+  for (const e of eventRows.value) {
+    const pid = e?.participantId
+    if (!pid) continue
+    if (!map.has(pid)) map.set(pid, { id: pid, visit: null, registration: null })
+  }
   const list = [...map.values()]
   list.sort((a, b) => sessionLatestAtMs(b) - sessionLatestAtMs(a))
   return list
 })
 
+function normalizePath(p) {
+  if (!p || typeof p !== 'string') return ''
+  const x = p.trim().split('?')[0]
+  return x.replace(/\/+$/, '') || '/'
+}
+
+/** Только визит в /admin без заявки — строка не показывается при включённом «скрыть страницы». */
+function isAdminOnlySession(s) {
+  if (s.registration) return false
+  const visitPath = normalizePath(s.visit?.path)
+  if (visitPath === '/admin') return true
+  if (!s.visit) {
+    const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
+    if (!routes.length) return false
+    return routes.every((e) => normalizePath(e.path) === '/admin')
+  }
+  return false
+}
+
+const mergedSessionsTable = computed(() => {
+  const list = mergedSessions.value
+  if (!hidePageDetails.value) return list
+  return list.filter((s) => !isAdminOnlySession(s))
+})
+
 function sessionLatestAtMs(s) {
   const tVisit = s.visit?.openedAt ? new Date(s.visit.openedAt).getTime() : 0
   const tReg = s.registration?.submittedAt ? new Date(s.registration.submittedAt).getTime() : 0
-  return Math.max(tVisit, tReg)
+  let tEv = 0
+  for (const e of eventRows.value) {
+    if (e.participantId !== s.id) continue
+    if (hidePageDetails.value && e.kind === 'route') continue
+    const t = new Date(e.occurredAt).getTime()
+    if (t > tEv) tEv = t
+  }
+  return Math.max(tVisit, tReg, tEv)
 }
 
 function sessionLatestIso(s) {
@@ -59,9 +100,11 @@ function sessionLatestIso(s) {
 }
 
 function sessionStatusLabel(s) {
-  if (s.visit && s.registration) return 'Визит и заявка'
-  if (s.registration) return 'Только заявка'
-  return 'Только визит'
+  const hasEv = eventRows.value.some((e) => e.participantId === s.id)
+  if (s.visit && s.registration) return hasEv ? 'Визит, шаги и заявка' : 'Визит и заявка'
+  if (s.registration) return hasEv ? 'Заявка и шаги' : 'Только заявка'
+  if (s.visit) return hasEv ? 'Визит и шаги' : 'Только визит'
+  return hasEv ? 'Только шаги' : '—'
 }
 
 /** В таблице и в «Технических данных» — одна телеметрия: с заявки, если есть, иначе с визита. */
@@ -69,20 +112,78 @@ function sessionTelemetry(s) {
   return s.registration?.telemetry || s.visit?.telemetry || null
 }
 
+/** Ключи meta, которые не показываем в хронологии (дублируют label/телеметрию). */
+const META_KEYS_HIDE = new Set(['fromStep', 'toStep', 'requestIp'])
+
+function telemetryIpCombined(t) {
+  if (!t || typeof t !== 'object') return '—'
+  const client = (t.ip && String(t.ip).trim()) || ''
+  const srv = t.requestIp != null ? String(t.requestIp).trim() : ''
+  if (client && srv && client === srv) return client
+  if (client && srv) return `${client} · сервер: ${srv}`
+  if (client) return client
+  if (srv) return `сервер: ${srv}`
+  return '—'
+}
+
 function sessionIp(s) {
-  return visitIp(sessionTelemetry(s))
+  return telemetryIpCombined(sessionTelemetry(s))
+}
+
+function sessionLastPath(s) {
+  if (hidePageDetails.value) {
+    return s.visit?.path || '—'
+  }
+  const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
+  if (!routes.length) return s.visit?.path || '—'
+  routes.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+  return routes[0].path || s.visit?.path || '—'
+}
+
+function eventsForSession(id) {
+  let list = eventRows.value
+    .filter((e) => e.participantId === id)
+    .slice()
+    .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
+  if (hidePageDetails.value) {
+    list = list.filter((e) => e.kind !== 'route')
+  }
+  return list
+}
+
+function eventMetaEntries(ev) {
+  if (!ev?.meta || typeof ev.meta !== 'object') return []
+  return Object.entries(ev.meta)
+    .filter(([key]) => !META_KEYS_HIDE.has(key))
+    .map(([key, value]) => ({
+      key,
+      value: typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value),
+    }))
+}
+
+function exportEventMeta(meta) {
+  if (!meta || typeof meta !== 'object') return ''
+  const out = { ...meta }
+  for (const k of META_KEYS_HIDE) delete out[k]
+  return Object.keys(out).length ? JSON.stringify(out) : ''
 }
 
 async function refresh() {
   listError.value = ''
   try {
-    const [regData, visitData] = await Promise.all([fetchRegistrations(), fetchSiteVisits()])
+    const [regData, visitData, evData] = await Promise.all([
+      fetchRegistrations(),
+      fetchSiteVisits(),
+      fetchSessionEvents(),
+    ])
     rows.value = regData
     visitRows.value = visitData
+    eventRows.value = evData
   } catch (e) {
     listError.value = e.message || 'Не удалось загрузить данные'
     rows.value = []
     visitRows.value = []
+    eventRows.value = []
   }
 }
 
@@ -101,38 +202,69 @@ function toggleExpand(id) {
   expandedId.value = expandedId.value === id ? null : id
 }
 
-function visitIp(t) {
-  if (!t || typeof t !== 'object') return '—'
-  return t.ip || '—'
-}
-
 function exportExcel() {
   const wb = XLSX.utils.book_new()
+  const hide = hidePageDetails.value
+  const tableRows = mergedSessionsTable.value
   const sheet = XLSX.utils.json_to_sheet(
-    mergedSessions.value.map((s) => {
+    tableRows.map((s) => {
       const v = s.visit
       const r = s.registration
-      return {
+      const base = {
         id: s.id,
         Статус: sessionStatusLabel(s),
+        'Страница (последняя)': sessionLastPath(s),
         'Открытие (время)': v ? formatAdminWhen(v.openedAt) : '',
-        Путь: v?.path || '',
         'Заявка (время)': r ? formatAdminWhen(r.submittedAt) : '',
         Имя: r?.fullName || '',
         'E-mail': r?.email || '',
         Сценарий: r ? registrationFlowLabel(r.flow) : '',
         Номер: r?.raffleNumber || '',
         'Опрос (фишинг)': r ? (r.mainPrizeOptIn ? 'да' : 'нет') : '',
-        'IP (клиент)': sessionTelemetry(s)?.ip || '',
+        'IP (клиент / сервер)': sessionIp(s) === '—' ? '' : sessionIp(s),
         'User-Agent': sessionTelemetry(s)?.userAgent || '',
         'Часовой пояс': sessionTelemetry(s)?.timezone || '',
         'Платформа': sessionTelemetry(s)?.platform || '',
         'Открытие ISO': v?.openedAt || '',
         'Заявка ISO': r?.submittedAt || '',
       }
+      if (!hide) {
+        base['Путь (визит)'] = v?.path || ''
+        base['Последний маршрут (все маршруты)'] = (() => {
+          const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
+          if (!routes.length) return v?.path || ''
+          routes.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+          return routes[0].path || v?.path || ''
+        })()
+      }
+      return base
     }),
   )
   XLSX.utils.book_append_sheet(wb, sheet, 'Журнал')
+
+  const evSource = hide ? eventRows.value.filter((e) => e.kind !== 'route') : [...eventRows.value]
+  const evSheet = XLSX.utils.json_to_sheet(
+    evSource
+      .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
+      .map((e) => {
+        const row = {
+          'id сессии': e.participantId,
+          Время: formatAdminWhen(e.occurredAt),
+          'Время ISO': e.occurredAt,
+          Тип: sessionEventKindLabel(e.kind),
+          kind: e.kind,
+          'Шаг формы': e.stepIndex != null ? e.stepIndex : '',
+          Подпись: e.label || '',
+          Данные: exportEventMeta(e.meta),
+        }
+        if (!hide) {
+          row.Путь = e.path || ''
+        }
+        return row
+      }),
+  )
+  XLSX.utils.book_append_sheet(wb, evSheet, 'Шаги и страницы')
+
   XLSX.writeFile(wb, `admin-export-${Date.now()}.xlsx`)
 }
 
@@ -147,7 +279,12 @@ async function clearRegistrationsOnly() {
 }
 
 async function clearVisitsOnly() {
-  if (!window.confirm('Удалить весь журнал открытий сайта? Заявки не трогаем.')) return
+  if (
+    !window.confirm(
+      'Удалить журнал открытий сайта и хронологию шагов/страниц? Заявки не трогаем.',
+    )
+  )
+    return
   try {
     await clearSiteVisits()
     await refresh()
@@ -166,6 +303,7 @@ watch(
       stopPoll()
       rows.value = []
       visitRows.value = []
+      eventRows.value = []
     }
   },
   { immediate: true },
@@ -223,9 +361,16 @@ onUnmounted(() => {
           <div>
             <h1 class="admin__title">Панель</h1>
             <p class="admin__meta">
-              Записей в журнале: {{ mergedSessions.length }} (визитов: {{ visitRows.length }}, заявок:
-              {{ rows.length }})
+              В таблице: {{ mergedSessionsTable.length }} · всего в журнале: {{ mergedSessions.length }} (визитов:
+              {{ visitRows.length }}, заявок: {{ rows.length }}, событий: {{ eventRows.length }})
+              <template v-if="hidePageDetails && mergedSessionsTable.length < mergedSessions.length">
+                · скрыто админских визитов: {{ mergedSessions.length - mergedSessionsTable.length }}
+              </template>
             </p>
+            <label class="admin__privacy">
+              <input v-model="hidePageDetails" type="checkbox" />
+              <span>Скрыть сведения о страницах (URL, маршруты)</span>
+            </label>
             <p v-if="listError" class="field__error">{{ listError }}</p>
           </div>
           <div class="admin__actions">
@@ -236,8 +381,13 @@ onUnmounted(() => {
           </div>
         </header>
 
-        <div v-if="mergedSessions.length === 0" class="card card--empty">
-          Записей пока нет — не было открытий с телеметрией или заявок, либо база пуста.
+        <div v-if="mergedSessionsTable.length === 0" class="card card--empty">
+          <template v-if="mergedSessions.length > 0">
+            Все записи скрыты (например, только визиты в /admin при включённом «скрыть сведения о страницах»).
+          </template>
+          <template v-else>
+            Записей пока нет — не было открытий с телеметрией или заявок, либо база пуста.
+          </template>
         </div>
 
         <div v-else class="table-wrap">
@@ -246,19 +396,19 @@ onUnmounted(() => {
               <tr>
                 <th>Последнее событие</th>
                 <th>Статус</th>
-                <th>Путь</th>
+                <th>Страница (последняя)</th>
                 <th>Имя</th>
                 <th>E-mail</th>
-                <th>IP</th>
+                <th>IP (клиент / сервер)</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              <template v-for="s in mergedSessions" :key="s.id">
+              <template v-for="s in mergedSessionsTable" :key="s.id">
                 <tr class="table__row" @click="toggleExpand(s.id)">
                   <td>{{ formatAdminWhen(sessionLatestIso(s)) }}</td>
                   <td>{{ sessionStatusLabel(s) }}</td>
-                  <td class="table__mono">{{ s.visit?.path || '—' }}</td>
+                  <td class="table__mono">{{ sessionLastPath(s) }}</td>
                   <td>{{ s.registration?.fullName || '—' }}</td>
                   <td class="table__mono">{{ s.registration?.email || '—' }}</td>
                   <td class="table__mono">{{ sessionIp(s) }}</td>
@@ -283,7 +433,7 @@ onUnmounted(() => {
                         </p>
                         <template v-if="s.visit">
                           <p><strong>Открытие:</strong> {{ formatAdminWhen(s.visit.openedAt) }}</p>
-                          <p>
+                          <p v-if="!hidePageDetails">
                             <strong>Путь:</strong> <span class="detail__mono">{{ s.visit.path }}</span>
                           </p>
                         </template>
@@ -318,14 +468,40 @@ onUnmounted(() => {
                         </template>
                       </section>
 
+                      <section v-if="eventsForSession(s.id).length" class="detail__block">
+                        <h3 class="detail__h">{{ hidePageDetails ? 'Хронология (шаги)' : 'Хронология (страницы и шаги)' }}</h3>
+                        <p class="detail__muted">
+                          Время на устройстве пользователя; порядок — от первого события к последнему.
+                        </p>
+                        <ol class="detail__timeline">
+                          <li v-for="ev in eventsForSession(s.id)" :key="ev.id" class="detail__timeline-item">
+                            <span class="detail__timeline-time">{{ formatAdminWhen(ev.occurredAt) }}</span>
+                            <span class="detail__timeline-kind">{{ sessionEventKindLabel(ev.kind) }}</span>
+                            <span v-if="!hidePageDetails && ev.path" class="detail__mono detail__timeline-path">{{ ev.path }}</span>
+                            <span v-if="ev.label" class="detail__timeline-label">{{ ev.label }}</span>
+                            <span
+                              v-if="ev.stepIndex != null && ev.kind !== 'register_transition'"
+                              class="detail__badge"
+                              >шаг {{ ev.stepIndex }}</span
+                            >
+                            <dl v-if="eventMetaEntries(ev).length" class="detail__meta-dl">
+                              <template v-for="row in eventMetaEntries(ev)" :key="row.key">
+                                <dt>{{ formatStepDataMetaKey(row.key) }}</dt>
+                                <dd class="detail__mono">{{ row.value }}</dd>
+                              </template>
+                            </dl>
+                          </li>
+                        </ol>
+                      </section>
+
                       <section v-if="sessionTelemetry(s)" class="detail__block">
                         <h3 class="detail__h">Технические данные</h3>
                         <p v-if="s.visit && s.registration" class="detail__muted">
                           Снимок на момент отправки заявки (для визита без заявки — на момент открытия).
                         </p>
                         <dl class="detail__dl">
-                          <dt>IP (клиент, ipify)</dt>
-                          <dd>{{ sessionTelemetry(s)?.ip || '—' }}</dd>
+                          <dt>IP (клиент / сервер запроса)</dt>
+                          <dd class="detail__mono">{{ sessionIp(s) }}</dd>
                           <dt>User-Agent</dt>
                           <dd class="detail__mono">{{ sessionTelemetry(s)?.userAgent || '—' }}</dd>
                           <dt>Платформа</dt>
@@ -406,6 +582,27 @@ onUnmounted(() => {
   margin: 4px 0 0;
   font-size: 14px;
   color: #6c6c6c;
+}
+
+.admin__privacy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  max-width: 520px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #3b3b3b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.admin__privacy input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 .admin__toolbar {
@@ -659,6 +856,94 @@ onUnmounted(() => {
 .detail__muted {
   color: #6c6c6c;
   font-size: 14px;
+}
+
+.detail__timeline {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: ev;
+}
+
+.detail__timeline-item {
+  position: relative;
+  padding: 10px 0 10px 28px;
+  border-left: 2px solid #e0e0e2;
+  margin-left: 8px;
+}
+
+.detail__timeline-item:last-child {
+  border-left-color: transparent;
+}
+
+.detail__timeline-item::before {
+  counter-increment: ev;
+  content: counter(ev);
+  position: absolute;
+  left: -11px;
+  top: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--blue-default);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+
+.detail__timeline-time {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-100);
+  margin-bottom: 4px;
+}
+
+.detail__timeline-kind {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--blue-default);
+  margin-right: 8px;
+}
+
+.detail__timeline-path {
+  display: block;
+  font-size: 12px;
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.detail__timeline-label {
+  display: block;
+  font-size: 14px;
+  margin-top: 4px;
+  color: #3b3b3b;
+}
+
+.detail__meta-dl {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
+  gap: 6px 12px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  background: #f7f8fb;
+  border: 1px solid #e8e8ea;
+  font-size: 13px;
+}
+
+.detail__meta-dl dt {
+  font-weight: 600;
+  color: #555;
+}
+
+.detail__meta-dl dd {
+  margin: 0;
+  word-break: break-word;
 }
 
 @media (max-width: 1024px) {

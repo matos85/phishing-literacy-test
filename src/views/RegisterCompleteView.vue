@@ -1,33 +1,95 @@
+<script setup>
+import { logSessionEvent } from '../lib/sessionEvents'
+
+/** Тот же кадр, что и на шагах регистрации (`RegisterView.vue`). */
+const REGISTER_BG_IMAGE = '/images/hero/apartment.png'
+
+const DTEL_HOME = 'https://dtel.ru/'
+
+function onLeaveToDtel(e) {
+  e.preventDefault()
+  void logSessionEvent({
+    kind: 'leave_to_public_home',
+    label: 'Кнопка «На главную» (dtel.ru)',
+    path: `${window.location.pathname}${window.location.search || ''}`.slice(0, 768),
+    meta: { target: DTEL_HOME },
+  })
+  window.location.assign(DTEL_HOME)
+}
+</script>
+
 <template>
   <div class="complete">
-    <div class="complete__card">
-      <div class="complete__icon" aria-hidden="true">✓</div>
-      <h1 class="complete__title">Регистрация принята</h1>
-      <p class="complete__text">
-        Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.
-      </p>
+    <div
+      class="complete__bg"
+      :style="{ backgroundImage: `url(${REGISTER_BG_IMAGE})` }"
+      aria-hidden="true"
+    />
+    <div class="complete__overlay" aria-hidden="true" />
 
-      <a href="https://dtel.ru/" class="complete__btn">На главную</a>
+    <div class="complete__wrap">
+      <div class="complete__card">
+        <div class="complete__icon" aria-hidden="true">✓</div>
+        <h1 class="complete__title">Регистрация принята</h1>
+        <p class="complete__text">
+          Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.
+        </p>
+
+        <a :href="DTEL_HOME" class="complete__btn" @click="onLeaveToDtel">На главную</a>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .complete {
+  position: relative;
   min-height: calc(100dvh - var(--header-height));
+  overflow: hidden;
+  padding: 32px 20px 72px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 20px 72px;
-  background: var(--page-background, #f9fafb);
+  background: var(--blue-dark);
+}
+
+.complete__bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.03);
+}
+
+.complete__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    120deg,
+    rgba(10, 22, 47, 0.78) 0%,
+    rgba(10, 22, 47, 0.52) 45%,
+    rgba(10, 22, 47, 0.68) 100%
+  );
+}
+
+.complete__wrap {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
 }
 
 .complete__card {
   max-width: 480px;
+  margin: 0 auto;
   text-align: center;
   padding: 48px 40px;
   background: #fff;
-  border: 1px solid #e8e8ea;
+  border: 1px solid #e0e0e2;
+  box-shadow: 0 12px 40px rgba(10, 22, 47, 0.08);
 }
 
 .complete__icon {

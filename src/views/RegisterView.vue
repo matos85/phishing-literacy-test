@@ -1,9 +1,15 @@
 <script setup>
-import { reactive, ref, computed, onUnmounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { submitRegistration } from '../lib/apiRegistration'
 import { buildTelemetry } from '../lib/clientMeta'
 import { getOrCreateParticipantId } from '../lib/participantId'
+import {
+  logRegisterQuizPreparing,
+  logRegisterQuizReady,
+  logRegisterTransition,
+  logSessionEvent,
+} from '../lib/sessionEvents'
 
 const router = useRouter()
 
@@ -32,6 +38,7 @@ const errors = reactive({
 })
 
 const submitting = ref(false)
+const submitError = ref('')
 
 const mainPrizeOptIn = ref(false)
 
@@ -74,12 +81,14 @@ function beginStep3QuestionGeneration() {
   sessionQ1.value = null
   quizAnswers.q1 = ''
   step3Loading.value = true
+  void logRegisterQuizPreparing()
   const ms = 850
   genTimeoutId = setTimeout(() => {
     genTimeoutId = null
     sessionQ1.value = getStep4Question()
     form.quizCategory = 'infosec'
     step3Loading.value = false
+    void logRegisterQuizReady()
   }, ms)
 }
 
@@ -91,6 +100,21 @@ const stepLabel = computed(() => {
     return `Шаг 4 из ${TOTAL_STEPS} · вопрос`
   }
   return `Шаг ${step.value + 1} из ${TOTAL_STEPS}`
+})
+
+watch(
+  step,
+  () => {
+    submitError.value = ''
+  },
+)
+
+onMounted(() => {
+  void logSessionEvent({
+    kind: 'register_landing',
+    label: 'Открытие страницы регистрации (сценарий)',
+    path: `${window.location.pathname}${window.location.search || ''}`.slice(0, 768),
+  })
 })
 
 onUnmounted(() => {
@@ -168,16 +192,40 @@ function goNext() {
   if (!validateStep(step.value)) return
 
   if (step.value === 2) {
+    void logRegisterTransition(
+      2,
+      3,
+      { agreedSurvey: 'Переход к вопросу викторины' },
+      'Подтверждение и переход к вопросу',
+    )
     acceptPhishingSurvey()
     return
   }
 
   if (step.value === 3) {
+    const q = sessionQ1.value
+    const o1 = q?.options?.find((o) => o.value === quizAnswers.q1)
+    void logRegisterTransition(
+      3,
+      null,
+      {
+        quizAnswer: quizAnswers.q1,
+        quizLabel: o1?.text ? String(o1.text).slice(0, 200) : '',
+        quizQuestionId: q?.id || '',
+      },
+      'Ответ на викторину → отправка',
+    )
     onSubmit()
     return
   }
 
   if (step.value < TOTAL_STEPS - 1) {
+    if (step.value === 0) {
+      void logRegisterTransition(0, 1, { fullName: form.fullName.trim() }, 'Имя → следующий шаг')
+    }
+    if (step.value === 1) {
+      void logRegisterTransition(1, 2, { email: form.email.trim() }, 'E-mail → следующий шаг')
+    }
     step.value += 1
   } else {
     onSubmit()
@@ -186,6 +234,7 @@ function goNext() {
 
 function goBack() {
   if (step.value > 0) {
+    submitError.value = ''
     const nextStep = step.value - 1
     if (step.value === 3 && nextStep === 2) {
       mainPrizeOptIn.value = false
@@ -243,6 +292,12 @@ async function onSubmit() {
   submitting.value = true
 
   try {
+    await logSessionEvent({
+      kind: 'register_submit',
+      label: 'Отправка заявки',
+      path: `${window.location.pathname}${window.location.search || ''}`.slice(0, 768),
+    })
+
     const telemetry = await buildTelemetry()
 
     const record = {
@@ -263,10 +318,16 @@ async function onSubmit() {
       telemetry,
     }
 
+    if (!record.victorina?.length) {
+      throw new Error('Нет ответа на вопрос — выберите вариант и нажмите «Завершить» ещё раз.')
+    }
+
     await submitRegistration(record)
     await router.replace({ name: 'register-complete' })
   } catch (e) {
     console.error(e)
+    submitError.value =
+      e instanceof Error ? e.message : 'Не удалось отправить заявку. Попробуйте ещё раз.'
   } finally {
     submitting.value = false
   }
@@ -372,6 +433,8 @@ async function onSubmit() {
             </template>
           </div>
 
+          <p v-if="submitError" class="field__error dialog__submit-error" role="alert">{{ submitError }}</p>
+
           <div class="dialog__nav">
             <button
               v-if="step > 0"
@@ -395,7 +458,7 @@ async function onSubmit() {
               v-else-if="step === TOTAL_STEPS - 1"
               type="submit"
               class="dialog__btn dialog__btn--primary"
-              :disabled="submitting"
+              :disabled="submitting || step3Loading"
             >
               {{ submitting ? 'Отправка…' : 'Завершить' }}
             </button>
@@ -764,6 +827,13 @@ async function onSubmit() {
 .field__error {
   font-size: 13px;
   color: var(--system-red);
+}
+
+.dialog__submit-error {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  background: #fff5f5;
+  border-left: 3px solid var(--system-red);
 }
 
 .dialog__nav {

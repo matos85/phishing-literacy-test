@@ -47,3 +47,10 @@ export async function clearSiteVisits() {
   if (!res.ok) throw new Error(data.error || res.statusText)
   return data
 }
+
+export async function fetchSessionEvents() {
+  const res = await fetch('/api/session-events', { credentials: 'include' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || res.statusText)
+  return data.data || []
+}

@@ -33,6 +33,20 @@ const statements = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_visits_opened (opened_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS session_events (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    participant_id VARCHAR(64) NOT NULL,
+    occurred_at DATETIME(3) NOT NULL,
+    kind VARCHAR(40) NOT NULL,
+    path VARCHAR(768) NULL,
+    step_index SMALLINT NULL,
+    label VARCHAR(512) NULL,
+    meta JSON NULL,
+    created_at TIMESTAMP(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_se_participant_time (participant_id, occurred_at),
+    KEY idx_se_occurred (occurred_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ]
 
 async function ensureUniqueRaffleNumberIndex(pool) {
