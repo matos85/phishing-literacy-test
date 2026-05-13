@@ -1,5 +1,21 @@
 <script setup>
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { logSessionEvent } from '../lib/sessionEvents'
+
+const route = useRoute()
+
+const isReturning = computed(() => route.query.returning === '1')
+
+const completeTitle = computed(() =>
+  isReturning.value ? 'Вы уже регистрировались' : 'Регистрация принята',
+)
+
+const completeText = computed(() =>
+  isReturning.value
+    ? 'С этого браузера заявка уже была отправлена ранее. Повторная регистрация не требуется. Итоги розыгрыша — на указанный при участии рабочий e-mail.'
+    : 'Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.',
+)
 
 /** Тот же кадр, что и на шагах регистрации (`RegisterView.vue`). */
 const REGISTER_BG_IMAGE = '/images/hero/apartment.png'
@@ -30,9 +46,9 @@ function onLeaveToDtel(e) {
     <div class="complete__wrap">
       <div class="complete__card">
         <div class="complete__icon" aria-hidden="true">✓</div>
-        <h1 class="complete__title">Регистрация принята</h1>
+        <h1 class="complete__title">{{ completeTitle }}</h1>
         <p class="complete__text">
-          Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.
+          {{ completeText }}
         </p>
 
         <a :href="DTEL_HOME" class="complete__btn" @click="onLeaveToDtel">На главную</a>

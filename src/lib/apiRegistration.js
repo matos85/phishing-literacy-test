@@ -1,4 +1,17 @@
 /**
+ * Публичный запрос: есть ли заявка с данным id участника (совпадает с cookie `pl_participant_id`).
+ */
+export async function fetchRegistrationStatus(participantId) {
+  const raw = String(participantId || '').trim()
+  if (!raw) return { registered: false }
+  const id = encodeURIComponent(raw)
+  const res = await fetch(`/api/registration-status?id=${id}`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) return { registered: false, error: data.error }
+  return { registered: Boolean(data.registered) }
+}
+
+/**
  * Отправка заявки на бэкенд (тот же origin в Docker; в dev — прокси Vite /api → :3000).
  */
 export async function submitRegistration(record) {

@@ -134,6 +134,20 @@ async function allocateNextRaffleNumber(conn) {
 async function handleApi(req, res, url) {
   const pathname = url.pathname
 
+  /** Публично: есть ли заявка с таким id (тот же id, что в cookie участника). */
+  if (pathname === '/api/registration-status' && req.method === 'GET') {
+    const id = String(url.searchParams.get('id') || '').trim()
+    if (!id || id.length > 36) return json(res, 400, { error: 'Некорректный id' })
+    const pool = getPool()
+    try {
+      const [rows] = await pool.execute('SELECT id FROM registrations WHERE id = ? LIMIT 1', [id])
+      return json(res, 200, { registered: Array.isArray(rows) && rows.length > 0 })
+    } catch (e) {
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка запроса' })
+    }
+  }
+
   if (pathname === '/api/health' && req.method === 'GET') {
     return json(res, 200, { ok: true })
   }
@@ -211,6 +225,7 @@ async function handleApi(req, res, url) {
     if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
     const id = String(body.id || '').trim()
     if (!id) return json(res, 400, { error: 'Нужен id' })
+    if (id.length > 36) return json(res, 400, { error: 'Некорректный id' })
     const pathStr = String(body.path || '/').trim().slice(0, 768) || '/'
     const telemetryClient = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : {}
     const reqIp = clientIpFromReq(req)
@@ -302,6 +317,7 @@ async function handleApi(req, res, url) {
     const fullName = String(body.fullName || '').trim()
     const email = String(body.email || '').trim()
     if (!id || !fullName || !email) return json(res, 400, { error: 'id, fullName, email обязательны' })
+    if (id.length > 36) return json(res, 400, { error: 'Некорректный id' })
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: 'Некорректный email' })
     const flow = String(body.flow || '')
     if (!['full_registration', 'declined_main_prize'].includes(flow)) {

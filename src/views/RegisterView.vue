@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { submitRegistration } from '../lib/apiRegistration'
+import { submitRegistration, fetchRegistrationStatus } from '../lib/apiRegistration'
 import { buildTelemetry } from '../lib/clientMeta'
 import { getOrCreateParticipantId } from '../lib/participantId'
 import {
@@ -39,6 +39,9 @@ const errors = reactive({
 
 const submitting = ref(false)
 const submitError = ref('')
+
+/** После проверки «уже регистрировались по cookie» — показываем форму. */
+const registerGate = ref(false)
 
 const mainPrizeOptIn = ref(false)
 
@@ -109,7 +112,18 @@ watch(
   },
 )
 
-onMounted(() => {
+onMounted(async () => {
+  const pid = getOrCreateParticipantId()
+  try {
+    const { registered } = await fetchRegistrationStatus(pid)
+    if (registered) {
+      await router.replace({ name: 'register-complete', query: { returning: '1' } })
+      return
+    }
+  } catch {
+    /* нет сети / API — не блокируем сценарий */
+  }
+  registerGate.value = true
   void logSessionEvent({
     kind: 'register_landing',
     label: 'Открытие страницы регистрации (сценарий)',
@@ -344,7 +358,17 @@ async function onSubmit() {
     <div class="register__overlay" aria-hidden="true" />
 
     <div class="register__wrap">
-      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="register-dialog-title">
+      <div v-if="!registerGate" class="register__gate dialog" role="status" aria-live="polite">
+        <p class="dialog__eyebrow">Корпоративный розыгрыш</p>
+        <p class="dialog__title dialog__title--gate">Проверяем данные…</p>
+      </div>
+      <div
+        v-show="registerGate"
+        class="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="register-dialog-title"
+      >
         <p class="dialog__eyebrow">Корпоративный розыгрыш</p>
         <p class="dialog__step-meta" aria-live="polite">{{ stepLabel }}</p>
 
@@ -512,6 +536,21 @@ async function onSubmit() {
   border: 1px solid #e0e0e2;
   box-shadow: 0 12px 40px rgba(10, 22, 47, 0.08);
   padding: 32px 28px 28px;
+}
+
+.register__gate {
+  max-width: 520px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.dialog__title--gate {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(18px, 2.5vw, 22px);
+  font-weight: 600;
+  color: var(--gray-100);
+  line-height: 1.3;
 }
 
 .dialog__eyebrow {
