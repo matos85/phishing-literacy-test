@@ -18,10 +18,9 @@ dist-ssr
 # Учётные данные администратора (копия с admin-credentials.example.env)
 admin-credentials.env
 
-# Playwright / тестовые артефакты
-test-results/
-playwright-report/
+# Тестовые артефакты
 coverage/
+test-results/
 
 # Ключи и локальные секреты
 *.pem
