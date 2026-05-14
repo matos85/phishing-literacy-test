@@ -1,8 +1,10 @@
 /**
- * Уведомление в MAX (lk.dtel.ru): только UUID и IP участника.
+ * Уведомление в MAX (lk.dtel.ru): префикс, UUID и IP (клиент / ipify; при расхождении — IP запроса).
  * Токен и группа — из admin-credentials.env: MAX_TOKEN, MAX_GROUP.
  * Визиты со страницы /admin не отправляются (см. isMaxNotifyExcludedPath).
  */
+
+const MAX_MESSAGE_PREFIX = 'phishing check'
 
 const MAX_SEND_URL = process.env.MAX_SEND_URL || 'https://lk.dtel.ru/max/send'
 const MAX_TOKEN = String(process.env.MAX_TOKEN || '').trim()
@@ -57,8 +59,11 @@ export function notifyMaxVisitWithIp(p) {
   if (!hasIp) return
   if (notifiedParticipantIds.has(participantId)) return
 
-  const ipLine = (isPlausibleIp(r) ? r : isPlausibleIp(c) ? c : '').trim()
-  const message = `UUID: ${participantId}\nIP: ${ipLine}`
+  const ipPrimary = (isPlausibleIp(c) ? c : isPlausibleIp(r) ? r : '').trim()
+  let message = `${MAX_MESSAGE_PREFIX}\n\nUUID: ${participantId}\nIP (клиент / ipify): ${ipPrimary}`
+  if (isPlausibleIp(c) && isPlausibleIp(r) && c !== r) {
+    message += `\nIP (запрос к серверу): ${r}`
+  }
 
   const group = parseGroup()
   const body = JSON.stringify({ group, message })
