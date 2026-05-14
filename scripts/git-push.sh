@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 ENV_FILE="$ROOT/git-push.credentials.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Создайте $ENV_FILE из git-push.credentials.example.env"
+  echo "Создайте $ENV_FILE с GITHUB_USERNAME и GITHUB_TOKEN (PAT GitHub с доступом к repo)"
   exit 1
 fi
 set -a
