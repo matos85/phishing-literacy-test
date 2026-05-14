@@ -2,14 +2,18 @@
 import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { submitRegistration, fetchRegistrationStatus } from '../lib/apiRegistration'
-import { buildTelemetry } from '../lib/clientMeta'
 import { getOrCreateParticipantId } from '../lib/participantId'
+import { clearSessionEventsForParticipant } from '../lib/sessionEvents'
 import {
-  logRegisterQuizPreparing,
-  logRegisterQuizReady,
-  logRegisterTransition,
-  logSessionEvent,
-} from '../lib/sessionEvents'
+  logRegisterFirstOpenOnce,
+  logRegisterStepNext,
+  logRegisterFieldChange,
+  logRegisterSiteLeave,
+  logRegisterStepBack,
+  resetRegisterSessionMarkers,
+  SK_REG_FUNNEL_ACTIVE,
+  SK_REG_FIRST_OPEN,
+} from '../lib/registerFlowLog'
 
 const router = useRouter()
 
@@ -50,13 +54,13 @@ const STEP4_QUESTION = {
   id: 'reg-doc-link-1',
   text: 'Информационная безопасность. Что обязательно проверять перед переходом по ссылке в письме?',
   options: [
-    { value: 'a', text: 'a) Только тему письма' },
+    { value: 'a', text: 'Только тему письма' },
     {
       value: 'b',
-      text: 'b) Адрес отправителя, так как он может быть подделан, проверяйте ссылку тщательно',
+      text: 'Адрес отправителя, так как он может быть подделан, проверяйте ссылку тщательно',
     },
-    { value: 'c', text: 'c) Ничего, если письмо выглядит убедительно' },
-    { value: 'd', text: 'd) Только подпись' },
+    { value: 'c', text: 'Ничего, если письмо выглядит убедительно' },
+    { value: 'd', text: 'Только подпись' },
   ],
 }
 
@@ -84,14 +88,12 @@ function beginStep3QuestionGeneration() {
   sessionQ1.value = null
   quizAnswers.q1 = ''
   step3Loading.value = true
-  void logRegisterQuizPreparing()
   const ms = 850
   genTimeoutId = setTimeout(() => {
     genTimeoutId = null
     sessionQ1.value = getStep4Question()
     form.quizCategory = 'infosec'
     step3Loading.value = false
-    void logRegisterQuizReady()
   }, ms)
 }
 
@@ -107,10 +109,62 @@ const stepLabel = computed(() => {
 
 watch(
   step,
-  () => {
+  (v) => {
     submitError.value = ''
+    if (typeof sessionStorage !== 'undefined' && v > 0) {
+      try {
+        sessionStorage.setItem(SK_REG_FUNNEL_ACTIVE, '1')
+      } catch {
+        /* ignore */
+      }
+    }
   },
+  { flush: 'sync' },
 )
+
+/** Снимок полей шага перед «Далее» (только шаги с полями ввода). */
+function collectStepFieldChanges(stepIndex) {
+  const changes = []
+  if (stepIndex === 0) {
+    changes.push({ key: 'fullName', label: 'Имя', value: form.fullName.trim() || '—' })
+  }
+  if (stepIndex === 1) {
+    changes.push({ key: 'email', label: 'E-mail', value: form.email.trim() || '—' })
+  }
+  if (stepIndex === 3 && !step3Loading.value) {
+    const opt = sessionQ1.value?.options?.find((o) => o.value === quizAnswers.q1)
+    const raw = quizAnswers.q1 || '—'
+    changes.push({
+      key: 'quizAnswer',
+      label: 'Ответ викторины',
+      value: opt ? opt.text : String(raw),
+    })
+  }
+  return changes
+}
+
+function flushStepFieldLog(stepIndex) {
+  const changes = collectStepFieldChanges(stepIndex)
+  if (!changes.length) return
+  void logRegisterFieldChange(stepIndex, changes)
+}
+
+function onPageHide() {
+  const nav = typeof performance !== 'undefined' ? performance.getEntriesByType('navigation')[0] : null
+  if (nav && nav.type === 'reload') return
+  void logRegisterSiteLeave()
+}
+
+/** Новая воронка без «Далее» — чистим session_events и разрешаем снова «первое открытие». */
+async function resetSessionEventsIfFreshFunnel(participantId) {
+  try {
+    if (typeof sessionStorage === 'undefined' || sessionStorage.getItem(SK_REG_FUNNEL_ACTIVE) === '1') return
+    await clearSessionEventsForParticipant(participantId)
+    sessionStorage.removeItem(SK_REG_FIRST_OPEN)
+  } catch {
+    /* ignore */
+  }
+}
 
 onMounted(async () => {
   const pid = getOrCreateParticipantId()
@@ -123,15 +177,14 @@ onMounted(async () => {
   } catch {
     /* нет сети / API — не блокируем сценарий */
   }
+  await resetSessionEventsIfFreshFunnel(pid)
   registerGate.value = true
-  void logSessionEvent({
-    kind: 'register_landing',
-    label: 'Открытие страницы регистрации (сценарий)',
-    path: `${window.location.pathname}${window.location.search || ''}`.slice(0, 768),
-  })
+  window.addEventListener('pagehide', onPageHide)
+  await logRegisterFirstOpenOnce()
 })
 
 onUnmounted(() => {
+  window.removeEventListener('pagehide', onPageHide)
   clearGenerationTimer()
 })
 
@@ -206,39 +259,26 @@ function goNext() {
   if (!validateStep(step.value)) return
 
   if (step.value === 2) {
-    void logRegisterTransition(
-      2,
-      3,
-      { agreedSurvey: 'Переход к вопросу викторины' },
-      'Подтверждение и переход к вопросу',
-    )
+    void logRegisterStepNext(2, 3)
     acceptPhishingSurvey()
     return
   }
 
   if (step.value === 3) {
-    const q = sessionQ1.value
-    const o1 = q?.options?.find((o) => o.value === quizAnswers.q1)
-    void logRegisterTransition(
-      3,
-      null,
-      {
-        quizAnswer: quizAnswers.q1,
-        quizLabel: o1?.text ? String(o1.text).slice(0, 200) : '',
-        quizQuestionId: q?.id || '',
-      },
-      'Ответ на викторину → отправка',
-    )
+    flushStepFieldLog(3)
+    void logRegisterStepNext(3, null)
     onSubmit()
     return
   }
 
   if (step.value < TOTAL_STEPS - 1) {
     if (step.value === 0) {
-      void logRegisterTransition(0, 1, { fullName: form.fullName.trim() }, 'Имя → следующий шаг')
+      flushStepFieldLog(0)
+      void logRegisterStepNext(0, 1)
     }
     if (step.value === 1) {
-      void logRegisterTransition(1, 2, { email: form.email.trim() }, 'E-mail → следующий шаг')
+      flushStepFieldLog(1)
+      void logRegisterStepNext(1, 2)
     }
     step.value += 1
   } else {
@@ -249,7 +289,9 @@ function goNext() {
 function goBack() {
   if (step.value > 0) {
     submitError.value = ''
+    const from = step.value
     const nextStep = step.value - 1
+    void logRegisterStepBack(from, nextStep)
     if (step.value === 3 && nextStep === 2) {
       mainPrizeOptIn.value = false
       clearGenerationTimer()
@@ -306,14 +348,6 @@ async function onSubmit() {
   submitting.value = true
 
   try {
-    await logSessionEvent({
-      kind: 'register_submit',
-      label: 'Отправка заявки',
-      path: `${window.location.pathname}${window.location.search || ''}`.slice(0, 768),
-    })
-
-    const telemetry = await buildTelemetry()
-
     const record = {
       id: getOrCreateParticipantId(),
       fullName: form.fullName.trim(),
@@ -329,7 +363,6 @@ async function onSubmit() {
       flow: 'full_registration',
       victorina: buildVictorinaPayload(),
       submittedAt: new Date().toISOString(),
-      telemetry,
     }
 
     if (!record.victorina?.length) {
@@ -337,6 +370,7 @@ async function onSubmit() {
     }
 
     await submitRegistration(record)
+    resetRegisterSessionMarkers()
     await router.replace({ name: 'register-complete' })
   } catch (e) {
     console.error(e)

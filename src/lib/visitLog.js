@@ -1,10 +1,10 @@
 import { buildTelemetry } from './clientMeta'
-import { getOrCreateParticipantId } from './participantId'
+import { getParticipantIdForSiteContext } from './participantId'
 
 /** Визит по id сессии; при повторной загрузке строка обновляется на сервере (тот же id). */
 export async function logSiteVisit() {
   if (typeof window === 'undefined') return
-  const id = getOrCreateParticipantId()
+  const id = getParticipantIdForSiteContext()
   const path = `${window.location.pathname}${window.location.search || ''}`
   try {
     const telemetry = await buildTelemetry()

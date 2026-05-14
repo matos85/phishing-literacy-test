@@ -4,7 +4,8 @@ import * as XLSX from 'xlsx'
 import { RouterLink } from 'vue-router'
 import { authLogin, fetchRegistrations, clearRegistrations, fetchSiteVisits, clearSiteVisits, fetchSessionEvents } from '../lib/apiAdmin'
 import { adminLoggedIn, syncAdminSession } from '../composables/useAdminSession'
-import { formatAdminWhen, registrationFlowLabel, sessionEventKindLabel, formatStepDataMetaKey } from '../lib/adminFormat'
+import { formatAdminWhen, registrationFlowLabel, sessionEventKindLabel, formatStepDataMetaKey, formatSessionEventMetaValue } from '../lib/adminFormat'
+import { getOrCreateAdminParticipantId } from '../lib/participantId'
 
 const loginInput = ref('')
 const passwordInput = ref('')
@@ -15,7 +16,7 @@ const visitRows = ref([])
 const eventRows = ref([])
 const expandedId = ref(null)
 
-/** Включено по умолчанию: не показывать URL/маршруты и не выгружать их в Excel. */
+/** Включено по умолчанию: скрыть сессию консоли `/admin` и маршруты панели (не трогать воронку регистрации). */
 const hidePageDetails = ref(true)
 
 const POLL_MS = 8000
@@ -62,24 +63,45 @@ function normalizePath(p) {
   return x.replace(/\/+$/, '') || '/'
 }
 
-/** Только визит в /admin без заявки — строка не показывается при включённом «скрыть страницы». */
-function isAdminOnlySession(s) {
-  if (s.registration) return false
-  const visitPath = normalizePath(s.visit?.path)
-  if (visitPath === '/admin') return true
-  if (!s.visit) {
-    const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
-    if (!routes.length) return false
-    return routes.every((e) => normalizePath(e.path) === '/admin')
-  }
-  return false
+/** Маршруты интерфейса админки (форма входа и панель). */
+function isAdminRoutePath(p) {
+  const n = normalizePath(p)
+  return n === '/admin' || n.startsWith('/admin/')
 }
 
 const mergedSessionsTable = computed(() => {
   const list = mergedSessions.value
   if (!hidePageDetails.value) return list
-  return list.filter((s) => !isAdminOnlySession(s))
+  return list.filter((s) => !shouldHideSessionInPrivacyMode(s))
 })
+
+/** Сессия только из cookie консоли `/admin` (отдельный participant id). */
+function isAdminConsoleSession(s) {
+  try {
+    return s.id === getOrCreateAdminParticipantId()
+  } catch {
+    return false
+  }
+}
+
+/** Скрывать при включённом «без админки»: отдельная консольная сессия или старые строки «только /admin» без заявки. */
+function shouldHideSessionInPrivacyMode(s) {
+  if (isAdminConsoleSession(s)) return true
+  return isAdminOnlySession(s)
+}
+
+/** Только визит в /admin без заявки — для старых данных, где события ещё писались в общий id. */
+function isAdminOnlySession(s) {
+  if (s.registration) return false
+  const visitPath = normalizePath(s.visit?.path)
+  if (visitPath && isAdminRoutePath(visitPath)) return true
+  if (!s.visit) {
+    const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
+    if (!routes.length) return false
+    return routes.every((e) => isAdminRoutePath(e.path))
+  }
+  return false
+}
 
 function sessionLatestAtMs(s) {
   const tVisit = s.visit?.openedAt ? new Date(s.visit.openedAt).getTime() : 0
@@ -87,7 +109,7 @@ function sessionLatestAtMs(s) {
   let tEv = 0
   for (const e of eventRows.value) {
     if (e.participantId !== s.id) continue
-    if (hidePageDetails.value && e.kind === 'route') continue
+    if (hidePageDetails.value && e.kind === 'route' && isAdminRoutePath(e.path)) continue
     const t = new Date(e.occurredAt).getTime()
     if (t > tEv) tEv = t
   }
@@ -107,13 +129,32 @@ function sessionStatusLabel(s) {
   return hasEv ? 'Только шаги' : '—'
 }
 
-/** В таблице и в «Технических данных» — одна телеметрия: с заявки, если есть, иначе с визита. */
+/** Снимок телеметрии: визит + тонкий слой из заявки (без дублирования JSON). */
 function sessionTelemetry(s) {
-  return s.registration?.telemetry || s.visit?.telemetry || null
+  const v =
+    s.visit?.telemetry && typeof s.visit.telemetry === 'object' && !Array.isArray(s.visit.telemetry)
+      ? { ...s.visit.telemetry }
+      : {}
+  const r =
+    s.registration?.telemetry &&
+    typeof s.registration.telemetry === 'object' &&
+    !Array.isArray(s.registration.telemetry)
+      ? s.registration.telemetry
+      : {}
+  const merged = { ...v, ...r }
+  return Object.keys(merged).length ? merged : null
 }
 
 /** Ключи meta, которые не показываем в хронологии (дублируют label/телеметрию). */
-const META_KEYS_HIDE = new Set(['fromStep', 'toStep', 'requestIp'])
+const META_KEYS_HIDE = new Set([
+  'fromStep',
+  'toStep',
+  'requestIp',
+  'quizAnswer',
+  'quizQuestionId',
+  'stepIndex',
+  'afterBack',
+])
 
 function telemetryIpCombined(t) {
   if (!t || typeof t !== 'object') return '—'
@@ -132,7 +173,15 @@ function sessionIp(s) {
 
 function sessionLastPath(s) {
   if (hidePageDetails.value) {
-    return s.visit?.path || '—'
+    const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
+    const publicRoutes = routes.filter((e) => !isAdminRoutePath(e.path))
+    if (publicRoutes.length) {
+      publicRoutes.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+      return publicRoutes[0].path || '—'
+    }
+    const vp = s.visit?.path || ''
+    if (vp && !isAdminRoutePath(vp)) return vp
+    return '—'
   }
   const routes = eventRows.value.filter((e) => e.participantId === s.id && e.kind === 'route')
   if (!routes.length) return s.visit?.path || '—'
@@ -146,26 +195,47 @@ function eventsForSession(id) {
     .slice()
     .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
   if (hidePageDetails.value) {
-    list = list.filter((e) => e.kind !== 'route')
+    list = list.filter((e) => !(e.kind === 'route' && isAdminRoutePath(e.path)))
   }
   return list
+}
+
+/** Ответ викторины не показываем в meta хронологии — он уже в блоке заявки (victorina). */
+function omitTimelineMetaEntry(eventKind, key, value) {
+  return (
+    eventKind === 'register_field_input' &&
+    key === 'changes' &&
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((c) => c && typeof c === 'object' && c.key === 'quizAnswer')
+  )
 }
 
 function eventMetaEntries(ev) {
   if (!ev?.meta || typeof ev.meta !== 'object') return []
   return Object.entries(ev.meta)
     .filter(([key]) => !META_KEYS_HIDE.has(key))
+    .filter(([key, value]) => !(key === 'returning' && !value))
+    .filter(([key, value]) => !omitTimelineMetaEntry(ev.kind, key, value))
     .map(([key, value]) => ({
       key,
-      value: typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value),
+      value: formatSessionEventMetaValue(key, value),
     }))
 }
 
-function exportEventMeta(meta) {
+function exportEventMeta(meta, eventKind = '') {
   if (!meta || typeof meta !== 'object') return ''
   const out = { ...meta }
   for (const k of META_KEYS_HIDE) delete out[k]
-  return Object.keys(out).length ? JSON.stringify(out) : ''
+  if (out.returning === false || out.returning === 0 || out.returning === '0') delete out.returning
+  for (const k of Object.keys(out)) {
+    if (omitTimelineMetaEntry(eventKind, k, out[k])) delete out[k]
+  }
+  const parts = []
+  for (const [k, v] of Object.entries(out)) {
+    parts.push(`${formatStepDataMetaKey(k)}: ${formatSessionEventMetaValue(k, v)}`)
+  }
+  return parts.length ? parts.join('; ') : ''
 }
 
 async function refresh() {
@@ -214,7 +284,7 @@ function exportExcel() {
         id: s.id,
         Статус: sessionStatusLabel(s),
         'Страница (последняя)': sessionLastPath(s),
-        'Открытие (время)': v ? formatAdminWhen(v.openedAt) : '',
+        'Визит в БД (время, сервер)': v ? formatAdminWhen(v.openedAt) : '',
         'Заявка (время)': r ? formatAdminWhen(r.submittedAt) : '',
         Имя: r?.fullName || '',
         'E-mail': r?.email || '',
@@ -225,7 +295,7 @@ function exportExcel() {
         'User-Agent': sessionTelemetry(s)?.userAgent || '',
         'Часовой пояс': sessionTelemetry(s)?.timezone || '',
         'Платформа': sessionTelemetry(s)?.platform || '',
-        'Открытие ISO': v?.openedAt || '',
+        'Визит ISO (сервер)': v?.openedAt || '',
         'Заявка ISO': r?.submittedAt || '',
       }
       if (!hide) {
@@ -242,7 +312,9 @@ function exportExcel() {
   )
   XLSX.utils.book_append_sheet(wb, sheet, 'Журнал')
 
-  const evSource = hide ? eventRows.value.filter((e) => e.kind !== 'route') : [...eventRows.value]
+  const evSource = hide
+    ? eventRows.value.filter((e) => !(e.kind === 'route' && isAdminRoutePath(e.path)))
+    : [...eventRows.value]
   const evSheet = XLSX.utils.json_to_sheet(
     evSource
       .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
@@ -255,7 +327,7 @@ function exportExcel() {
           kind: e.kind,
           'Шаг формы': e.stepIndex != null ? e.stepIndex : '',
           Подпись: e.label || '',
-          Данные: exportEventMeta(e.meta),
+          Данные: exportEventMeta(e.meta, e.kind),
         }
         if (!hide) {
           row.Путь = e.path || ''
@@ -364,12 +436,12 @@ onUnmounted(() => {
               В таблице: {{ mergedSessionsTable.length }} · всего в журнале: {{ mergedSessions.length }} (визитов:
               {{ visitRows.length }}, заявок: {{ rows.length }}, событий: {{ eventRows.length }})
               <template v-if="hidePageDetails && mergedSessionsTable.length < mergedSessions.length">
-                · скрыто админских визитов: {{ mergedSessions.length - mergedSessionsTable.length }}
+                · скрыто записей (консоль /admin и пр.): {{ mergedSessions.length - mergedSessionsTable.length }}
               </template>
             </p>
             <label class="admin__privacy">
               <input v-model="hidePageDetails" type="checkbox" />
-              <span>Скрыть сведения о страницах (URL, маршруты)</span>
+              <span>Скрыть сессию консоли `/admin` и её маршруты (воронка регистрации не скрывается)</span>
             </label>
             <p v-if="listError" class="field__error">{{ listError }}</p>
           </div>
@@ -383,7 +455,7 @@ onUnmounted(() => {
 
         <div v-if="mergedSessionsTable.length === 0" class="card card--empty">
           <template v-if="mergedSessions.length > 0">
-            Все записи скрыты (например, только визиты в /admin при включённом «скрыть сведения о страницах»).
+            Все записи скрыты фильтром «скрыть сессию консоли /admin» — отключите чекбокс или дождитесь данных по участникам.
           </template>
           <template v-else>
             Записей пока нет — не было открытий с телеметрией или заявок, либо база пуста.
@@ -432,9 +504,17 @@ onUnmounted(() => {
                           В журнале визитов есть открытие с этим id; заявки с тем же id нет — форма не отправлялась.
                         </p>
                         <template v-if="s.visit">
-                          <p><strong>Открытие:</strong> {{ formatAdminWhen(s.visit.openedAt) }}</p>
-                          <p v-if="!hidePageDetails">
-                            <strong>Путь:</strong> <span class="detail__mono">{{ s.visit.path }}</span>
+                          <p>
+                            <strong>Время визита в БД (сервер, первый запрос):</strong>
+                            {{ formatAdminWhen(s.visit.openedAt) }}
+                          </p>
+                          <p
+                            v-if="
+                              s.visit.path &&
+                              (!hidePageDetails || !isAdminRoutePath(s.visit.path))
+                            "
+                          >
+                            <strong>URL этого визита:</strong> <span class="detail__mono">{{ s.visit.path }}</span>
                           </p>
                         </template>
                         <template v-if="s.registration">
@@ -469,21 +549,23 @@ onUnmounted(() => {
                       </section>
 
                       <section v-if="eventsForSession(s.id).length" class="detail__block">
-                        <h3 class="detail__h">{{ hidePageDetails ? 'Хронология (шаги)' : 'Хронология (страницы и шаги)' }}</h3>
-                        <p class="detail__muted">
-                          Время на устройстве пользователя; порядок — от первого события к последнему.
-                        </p>
+                        <h3 class="detail__h">
+                          {{
+                            hidePageDetails
+                              ? 'Хронология (без маршрутов /admin)'
+                              : 'Хронология (страницы и шаги)'
+                          }}
+                        </h3>
                         <ol class="detail__timeline">
                           <li v-for="ev in eventsForSession(s.id)" :key="ev.id" class="detail__timeline-item">
                             <span class="detail__timeline-time">{{ formatAdminWhen(ev.occurredAt) }}</span>
                             <span class="detail__timeline-kind">{{ sessionEventKindLabel(ev.kind) }}</span>
-                            <span v-if="!hidePageDetails && ev.path" class="detail__mono detail__timeline-path">{{ ev.path }}</span>
-                            <span v-if="ev.label" class="detail__timeline-label">{{ ev.label }}</span>
                             <span
-                              v-if="ev.stepIndex != null && ev.kind !== 'register_transition'"
-                              class="detail__badge"
-                              >шаг {{ ev.stepIndex }}</span
+                              v-if="ev.path && (!hidePageDetails || !isAdminRoutePath(ev.path))"
+                              class="detail__mono detail__timeline-path"
+                              >{{ ev.path }}</span
                             >
+                            <span v-if="ev.label" class="detail__timeline-label">{{ ev.label }}</span>
                             <dl v-if="eventMetaEntries(ev).length" class="detail__meta-dl">
                               <template v-for="row in eventMetaEntries(ev)" :key="row.key">
                                 <dt>{{ formatStepDataMetaKey(row.key) }}</dt>
@@ -944,6 +1026,7 @@ onUnmounted(() => {
 .detail__meta-dl dd {
   margin: 0;
   word-break: break-word;
+  white-space: pre-line;
 }
 
 @media (max-width: 1024px) {

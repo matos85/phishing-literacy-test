@@ -1,7 +1,8 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { logSessionEvent } from '../lib/sessionEvents'
+import { logRegisterFlowComplete, logRegisterSiteLeave } from '../lib/registerFlowLog'
 
 const route = useRoute()
 
@@ -21,6 +22,21 @@ const completeText = computed(() =>
 const REGISTER_BG_IMAGE = '/images/hero/apartment.png'
 
 const DTEL_HOME = 'https://dtel.ru/'
+
+function onPageHide() {
+  const nav = typeof performance !== 'undefined' ? performance.getEntriesByType('navigation')[0] : null
+  if (nav && nav.type === 'reload') return
+  void logRegisterSiteLeave()
+}
+
+onMounted(() => {
+  void logRegisterFlowComplete(route.query.returning === '1')
+  window.addEventListener('pagehide', onPageHide)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('pagehide', onPageHide)
+})
 
 function onLeaveToDtel(e) {
   e.preventDefault()
@@ -99,13 +115,11 @@ function onLeaveToDtel(e) {
 }
 
 .complete__card {
-  max-width: 480px;
-  margin: 0 auto;
-  text-align: center;
-  padding: 48px 40px;
   background: #fff;
   border: 1px solid #e0e0e2;
   box-shadow: 0 12px 40px rgba(10, 22, 47, 0.08);
+  padding: 48px 40px;
+  text-align: center;
 }
 
 .complete__icon {
@@ -131,18 +145,11 @@ function onLeaveToDtel(e) {
   line-height: 1.2;
 }
 
-.complete__text,
-.complete__hint {
+.complete__text {
   font-size: 15px;
   line-height: 1.55;
   color: #3b3b3b;
-  margin: 0 0 12px;
-}
-
-.complete__hint {
-  font-size: 14px;
-  color: #6c6c6c;
-  margin-bottom: 28px;
+  margin: 0 0 28px;
 }
 
 .complete__btn {

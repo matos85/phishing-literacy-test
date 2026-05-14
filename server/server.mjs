@@ -279,6 +279,24 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true })
   }
 
+  /** Публично: клиент чистит только свою цепочку перед новым первым открытием воронки (тот же participant id в cookie). */
+  if (pathname === '/api/session-events/clear-for-participant' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
+    const participantId = String(body.participantId || '').trim()
+    if (!participantId || participantId.length > 64) {
+      return json(res, 400, { error: 'Некорректный participantId' })
+    }
+    const pool = getPool()
+    try {
+      await pool.execute('DELETE FROM session_events WHERE participant_id = ?', [participantId])
+      return json(res, 200, { ok: true })
+    } catch (e) {
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка очистки' })
+    }
+  }
+
   if (pathname === '/api/session-events' && req.method === 'POST') {
     const body = await readJsonBody(req)
     if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
@@ -332,14 +350,21 @@ async function handleApi(req, res, url) {
     if (!['full_registration', 'declined_main_prize'].includes(flow)) {
       return json(res, 400, { error: 'Некорректный flow' })
     }
-    const telemetryBase = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : { note: 'empty' }
     const reqIp = clientIpFromReq(req)
-    const telemetry = { ...telemetryBase, ...(reqIp ? { requestIp: reqIp } : {}) }
+    /** Не дублируем телеметрию визита: в заявке только дополнение (IP запроса при submit). Если визита нет — тело telemetry с клиента. */
+    const pool = getPool()
+    const [visitTelRows] = await pool.execute('SELECT id FROM site_visits WHERE id = ? LIMIT 1', [id])
+    let telemetry = {}
+    if (visitTelRows.length > 0) {
+      if (reqIp) telemetry = { requestIp: reqIp }
+    } else {
+      const telemetryBase = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : { note: 'no_visit' }
+      telemetry = { ...telemetryBase, ...(reqIp ? { requestIp: reqIp } : {}) }
+    }
     const victorina = body.victorina == null ? null : body.victorina
     const submittedAt = body.submittedAt ? new Date(body.submittedAt) : new Date()
     if (Number.isNaN(submittedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
 
-    const pool = getPool()
     const insertSql = `INSERT INTO registrations (
           id, full_name, email, raffle_number, main_prize_opt_in, flow,
           quiz_category, quiz_category_label, victorina, telemetry, submitted_at
