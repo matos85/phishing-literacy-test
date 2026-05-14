@@ -9,7 +9,8 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/register' },
     { path: '/admin', name: 'admin', component: AdminView },
-    { path: '/register', name: 'register', component: RegisterView },
+    /** Один маршрут с alias — без redirect /register/↔/register (иначе возможен бесконечный цикл). */
+    { path: '/register', alias: '/register/', name: 'register', component: RegisterView },
     { path: '/register/complete', name: 'register-complete', component: RegisterCompleteView },
     {
       path: '/register/declined-main-prize',

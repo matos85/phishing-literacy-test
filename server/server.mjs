@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { getPool } from './db.mjs'
 import { verifyPassword } from './crypto-password.mjs'
 import { clientIpFromReq } from './client-ip.mjs'
+import { notifyMaxVisitWithIp, isMaxNotifyExcludedPath } from './max-notify.mjs'
 import {
   sessionCookieName,
   createSession,
@@ -181,7 +182,7 @@ async function handleApi(req, res, url) {
 
   if (pathname === '/api/auth/me' && req.method === 'GET') {
     const auth = requireAuth(req)
-    if (!auth) return json(res, 401, { ok: false })
+    if (!auth) return json(res, 200, { ok: false })
     return json(res, 200, { ok: true, login: auth.login })
   }
 
@@ -229,10 +230,11 @@ async function handleApi(req, res, url) {
     const pathStr = String(body.path || '/').trim().slice(0, 768) || '/'
     const telemetryClient = body.telemetry && typeof body.telemetry === 'object' ? body.telemetry : {}
     const reqIp = clientIpFromReq(req)
-    const telemetryPayload = JSON.stringify({
+    const telemetryMerged = {
       ...telemetryClient,
       ...(reqIp ? { requestIp: reqIp } : {}),
-    })
+    }
+    const telemetryPayload = JSON.stringify(telemetryMerged)
     const openedAt = body.openedAt ? new Date(body.openedAt) : new Date()
     if (Number.isNaN(openedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
     const pool = getPool()
@@ -245,6 +247,13 @@ async function handleApi(req, res, url) {
            opened_at = VALUES(opened_at)`,
         [id, pathStr, telemetryPayload, openedAt],
       )
+      if (!isMaxNotifyExcludedPath(pathStr)) {
+        notifyMaxVisitWithIp({
+          participantId: id,
+          clientIp: telemetryMerged.ip,
+          requestIp: telemetryMerged.requestIp,
+        })
+      }
       return json(res, 200, { ok: true, id })
     } catch (e) {
       console.error(e)

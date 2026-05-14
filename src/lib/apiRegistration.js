@@ -5,7 +5,8 @@ export async function fetchRegistrationStatus(participantId) {
   const raw = String(participantId || '').trim()
   if (!raw) return { registered: false }
   const id = encodeURIComponent(raw)
-  const res = await fetch(`/api/registration-status?id=${id}`)
+  const ctrl = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined
+  const res = await fetch(`/api/registration-status?id=${id}`, ctrl ? { signal: ctrl } : {})
   const data = await res.json().catch(() => ({}))
   if (!res.ok) return { registered: false, error: data.error }
   return { registered: Boolean(data.registered) }
