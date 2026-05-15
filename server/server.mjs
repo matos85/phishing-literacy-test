@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { getPool } from './db.mjs'
 import { verifyPassword } from './crypto-password.mjs'
 import { clientIpFromReq } from './client-ip.mjs'
-import { notifyMaxVisitWithIp, isMaxNotifyExcludedPath } from './max-notify.mjs'
+import { notifyMaxVisitWithIp, isMaxNotifyExcludedPath, markMaxNotifySentForRegistration } from './max-notify.mjs'
 import {
   sessionCookieName,
   createSession,
@@ -141,8 +141,12 @@ async function handleApi(req, res, url) {
     if (!id || id.length > 36) return json(res, 400, { error: 'Некорректный id' })
     const pool = getPool()
     try {
-      const [rows] = await pool.execute('SELECT id FROM registrations WHERE id = ? LIMIT 1', [id])
-      return json(res, 200, { registered: Array.isArray(rows) && rows.length > 0 })
+      const [rows] = await pool.execute('SELECT * FROM registrations WHERE id = ? LIMIT 1', [id])
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return json(res, 200, { registered: false })
+      }
+      const registration = rowToApi(rows[0])
+      return json(res, 200, { registered: true, registration })
     } catch (e) {
       console.error(e)
       return json(res, 500, { error: 'Ошибка запроса' })
@@ -201,6 +205,7 @@ async function handleApi(req, res, url) {
     if (!auth) return json(res, 401, { error: 'Требуется вход' })
     const pool = getPool()
     await pool.execute('DELETE FROM registrations')
+    await pool.execute('DELETE FROM max_notify_sent')
     return json(res, 200, { ok: true })
   }
 
@@ -239,7 +244,7 @@ async function handleApi(req, res, url) {
     if (Number.isNaN(openedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
     const pool = getPool()
     try {
-      await pool.execute(
+      const [visitResult] = await pool.execute(
         `INSERT INTO site_visits (id, path, telemetry, opened_at) VALUES (?, ?, CAST(? AS JSON), ?)
          ON DUPLICATE KEY UPDATE
            path = VALUES(path),
@@ -247,14 +252,27 @@ async function handleApi(req, res, url) {
            opened_at = VALUES(opened_at)`,
         [id, pathStr, telemetryPayload, openedAt],
       )
+      /** 1 = первый визит UUID, 2 = повторное обновление строки (уже был на сайте). */
+      const repeatVisit = Number(visitResult?.affectedRows) === 2
+      let maxNotifyRecorded = false
+      let maxNotifySynced = false
       if (!isMaxNotifyExcludedPath(pathStr)) {
-        notifyMaxVisitWithIp({
-          participantId: id,
-          clientIp: telemetryMerged.ip,
-          requestIp: telemetryMerged.requestIp,
-        })
+        const notifyOutcome = await notifyMaxVisitWithIp(
+          {
+            participantId: id,
+            clientIp: telemetryMerged.ip,
+            requestIp: telemetryMerged.requestIp,
+          },
+          pool,
+          {
+            clientAlreadyNotified: body.clientMaxNotified === true,
+            repeatVisit,
+          },
+        )
+        maxNotifyRecorded = notifyOutcome === 'written'
+        maxNotifySynced = notifyOutcome === 'synced'
       }
-      return json(res, 200, { ok: true, id })
+      return json(res, 200, { ok: true, id, maxNotifyRecorded, maxNotifySynced })
     } catch (e) {
       console.error(e)
       return json(res, 500, { error: 'Ошибка сохранения' })
@@ -337,6 +355,104 @@ async function handleApi(req, res, url) {
     }
   }
 
+  /** Восстановление заявки из localStorage браузера после сброса БД (тот же id в cookie). */
+  if (pathname === '/api/registrations/restore' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
+    const id = String(body.id || '').trim()
+    const fullName = String(body.fullName || '').trim()
+    const email = String(body.email || '').trim()
+    if (!id || !fullName || !email) return json(res, 400, { error: 'id, fullName, email обязательны' })
+    if (id.length > 36) return json(res, 400, { error: 'Некорректный id' })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: 'Некорректный email' })
+    const flow = String(body.flow || 'full_registration')
+    if (!['full_registration', 'declined_main_prize'].includes(flow)) {
+      return json(res, 400, { error: 'Некорректный flow' })
+    }
+    const reqIp = clientIpFromReq(req)
+    const pool = getPool()
+    const [existingReg] = await pool.execute('SELECT id FROM registrations WHERE id = ? LIMIT 1', [id])
+    if (Array.isArray(existingReg) && existingReg.length > 0) {
+      await markMaxNotifySentForRegistration(id, pool)
+      return json(res, 200, { ok: true, restored: false, alreadyExists: true, id })
+    }
+    const clientSubmittedAt =
+      body.submittedAt && !Number.isNaN(new Date(body.submittedAt).getTime())
+        ? new Date(body.submittedAt)
+        : null
+    const submittedAt = clientSubmittedAt || new Date()
+    const telemetry = {
+      restoredFromClient: true,
+      ...(clientSubmittedAt ? { clientSubmittedAt: clientSubmittedAt.toISOString() } : {}),
+      ...(reqIp ? { requestIp: reqIp } : {}),
+    }
+    const victorina = body.victorina == null ? null : body.victorina
+    const insertSql = `INSERT INTO registrations (
+          id, full_name, email, raffle_number, main_prize_opt_in, flow,
+          quiz_category, quiz_category_label, victorina, telemetry, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?)`
+    const conn = await pool.getConnection()
+    const lockName = 'pl_reg_raffle_seq'
+    const backupRaffle = body.raffleNumber != null ? String(body.raffleNumber).trim().slice(0, 32) : ''
+    try {
+      await conn.query('SELECT GET_LOCK(?, 20)', [lockName])
+      let raffleNumber = backupRaffle || (await allocateNextRaffleNumber(conn))
+      try {
+        await conn.execute(insertSql, [
+          id,
+          fullName,
+          email,
+          raffleNumber,
+          body.mainPrizeOptIn ? 1 : 0,
+          flow,
+          body.quizCategory || null,
+          body.quizCategoryLabel || null,
+          victorina == null ? null : JSON.stringify(victorina),
+          JSON.stringify(telemetry),
+          submittedAt,
+        ])
+      } catch (insertErr) {
+        if (insertErr.code === 'ER_DUP_ENTRY' && backupRaffle && String(insertErr.sqlMessage || '').includes('raffle')) {
+          raffleNumber = await allocateNextRaffleNumber(conn)
+          await conn.execute(insertSql, [
+            id,
+            fullName,
+            email,
+            raffleNumber,
+            body.mainPrizeOptIn ? 1 : 0,
+            flow,
+            body.quizCategory || null,
+            body.quizCategoryLabel || null,
+            victorina == null ? null : JSON.stringify(victorina),
+            JSON.stringify(telemetry),
+            submittedAt,
+          ])
+        } else {
+          throw insertErr
+        }
+      }
+      await markMaxNotifySentForRegistration(id, pool)
+      return json(res, 201, { ok: true, restored: true, id, raffleNumber })
+    } catch (e) {
+      if (e.code === 'ER_DUP_ENTRY') {
+        const msg = String(e.sqlMessage || '')
+        if (msg.includes('PRIMARY') || msg.includes(`'PRIMARY'`)) {
+          await markMaxNotifySentForRegistration(id, pool)
+          return json(res, 200, { ok: true, restored: false, alreadyExists: true, id })
+        }
+      }
+      console.error(e)
+      return json(res, 500, { error: 'Ошибка восстановления' })
+    } finally {
+      try {
+        await conn.query('SELECT RELEASE_LOCK(?)', [lockName])
+      } catch {
+        /* ignore */
+      }
+      conn.release()
+    }
+  }
+
   if (pathname === '/api/registrations' && req.method === 'POST') {
     const body = await readJsonBody(req)
     if (!body || typeof body !== 'object') return json(res, 400, { error: 'Неверное тело запроса' })
@@ -365,6 +481,12 @@ async function handleApi(req, res, url) {
     const submittedAt = body.submittedAt ? new Date(body.submittedAt) : new Date()
     if (Number.isNaN(submittedAt.getTime())) return json(res, 400, { error: 'Некорректная дата' })
 
+    const [existingReg] = await pool.execute('SELECT id FROM registrations WHERE id = ? LIMIT 1', [id])
+    if (Array.isArray(existingReg) && existingReg.length > 0) {
+      await markMaxNotifySentForRegistration(id, pool)
+      return json(res, 409, { error: 'Заявка с этим участником уже отправлена' })
+    }
+
     const insertSql = `INSERT INTO registrations (
           id, full_name, email, raffle_number, main_prize_opt_in, flow,
           quiz_category, quiz_category_label, victorina, telemetry, submitted_at
@@ -388,12 +510,14 @@ async function handleApi(req, res, url) {
         JSON.stringify(telemetry),
         submittedAt,
       ])
+      await markMaxNotifySentForRegistration(id, pool)
       return json(res, 201, { ok: true, id, raffleNumber })
     } catch (e) {
       if (e.code === 'ER_DUP_ENTRY') {
         const msg = String(e.sqlMessage || '')
         if (msg.includes('PRIMARY') || msg.includes(`'PRIMARY'`)) {
-          return json(res, 409, { error: 'Запись с таким id уже есть' })
+          await markMaxNotifySentForRegistration(id, pool)
+          return json(res, 409, { error: 'Заявка с этим участником уже отправлена' })
         }
       }
       console.error(e)

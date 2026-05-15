@@ -1,12 +1,23 @@
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { fetchRegistrationStatus } from '../lib/apiRegistration'
+import { getOrCreateParticipantId } from '../lib/participantId'
+import { ensureRegistrationBackupFromServer } from '../lib/registrationBackup'
+import { ensureMaxNotifyClientMark } from '../lib/maxNotifyClientMark'
 import { logSessionEvent } from '../lib/sessionEvents'
-import { logRegisterFlowComplete, logRegisterSiteLeave } from '../lib/registerFlowLog'
+import {
+  logRegisterFlowComplete,
+  logRegisterSiteLeave,
+  consumeRegisterJustSubmitted,
+} from '../lib/registerFlowLog'
 
-const route = useRoute()
+const router = useRouter()
 
-const isReturning = computed(() => route.query.returning === '1')
+/** Показываем карточку только после проверки registered на сервере. */
+const showComplete = ref(false)
+/** true — повторный заход; false — только что отправили заявку (sessionStorage, не URL). */
+const isReturning = ref(true)
 
 const completeTitle = computed(() =>
   isReturning.value ? 'Вы уже регистрировались' : 'Регистрация принята',
@@ -18,9 +29,7 @@ const completeText = computed(() =>
     : 'Спасибо за участие. Итоги будут отправлены на указанный рабочий e-mail.',
 )
 
-/** Тот же кадр, что и на шагах регистрации (`RegisterView.vue`). */
 const REGISTER_BG_IMAGE = '/images/hero/apartment.png'
-
 const DTEL_HOME = 'https://dtel.ru/'
 
 function onPageHide() {
@@ -29,9 +38,23 @@ function onPageHide() {
   void logRegisterSiteLeave()
 }
 
-onMounted(() => {
-  void logRegisterFlowComplete(route.query.returning === '1')
-  window.addEventListener('pagehide', onPageHide)
+onMounted(async () => {
+  const pid = getOrCreateParticipantId()
+  try {
+    const { registered, registration } = await fetchRegistrationStatus(pid)
+    if (!registered) {
+      await router.replace({ name: 'register' })
+      return
+    }
+    ensureRegistrationBackupFromServer(pid, registration)
+    ensureMaxNotifyClientMark(pid)
+    isReturning.value = !consumeRegisterJustSubmitted()
+    showComplete.value = true
+    void logRegisterFlowComplete(isReturning.value)
+    window.addEventListener('pagehide', onPageHide)
+  } catch {
+    await router.replace({ name: 'register' })
+  }
 })
 
 onUnmounted(() => {
@@ -60,7 +83,10 @@ function onLeaveToDtel(e) {
     <div class="complete__overlay" aria-hidden="true" />
 
     <div class="complete__wrap">
-      <div class="complete__card">
+      <div v-if="!showComplete" class="complete__card" role="status" aria-live="polite">
+        <p class="complete__text">Проверяем данные…</p>
+      </div>
+      <div v-else class="complete__card">
         <div class="complete__icon" aria-hidden="true">✓</div>
         <h1 class="complete__title">{{ completeTitle }}</h1>
         <p class="complete__text">

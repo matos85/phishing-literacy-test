@@ -21,6 +21,20 @@ admin-credentials.env
 # Тестовые артефакты
 coverage/
 test-results/
+playwright-report/
+blob-report/
+
+# Локальные e2e (не в репозитории)
+e2e/
+playwright.config.js
+scripts/e2e-api.mjs
+scripts/e2e-dedup.mjs
+scripts/e2e-dedup-browser.mjs
+scripts/e2e-url-spoof.mjs
+
+# Отладка MAX: вывод и резерв HTTP-версии
+data/max-notify.ndjson
+server/max-notify.mjs.send-to-max.backup
 
 # Ключи и локальные секреты
 *.pem

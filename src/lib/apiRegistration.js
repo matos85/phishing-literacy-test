@@ -9,12 +9,39 @@ export async function fetchRegistrationStatus(participantId) {
   const res = await fetch(`/api/registration-status?id=${id}`, ctrl ? { signal: ctrl } : {})
   const data = await res.json().catch(() => ({}))
   if (!res.ok) return { registered: false, error: data.error }
-  return { registered: Boolean(data.registered) }
+  return {
+    registered: Boolean(data.registered),
+    registration: data.registration && typeof data.registration === 'object' ? data.registration : null,
+  }
+}
+
+export class RegistrationApiError extends Error {
+  /** @param {string} message @param {number} status */
+  constructor(message, status) {
+    super(message)
+    this.name = 'RegistrationApiError'
+    this.status = status
+  }
 }
 
 /**
- * Отправка заявки на бэкенд (тот же origin в Docker; в dev — прокси Vite /api → :3000).
+ * Восстановить заявку в БД из локальной копии (после сброса БД, тот же cookie).
+ * @param {Record<string, unknown>} backup
  */
+export async function restoreRegistrationFromClient(backup) {
+  const res = await fetch('/api/registrations/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(backup),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const msg = data.error || res.statusText || `HTTP ${res.status}`
+    throw new RegistrationApiError(msg, res.status)
+  }
+  return data
+}
+
 export async function submitRegistration(record) {
   const res = await fetch('/api/registrations', {
     method: 'POST',
@@ -31,7 +58,7 @@ export async function submitRegistration(record) {
   }
   if (!res.ok) {
     const msg = data.error || data.raw || res.statusText || `HTTP ${res.status}`
-    throw new Error(msg)
+    throw new RegistrationApiError(msg, res.status)
   }
   return data
 }

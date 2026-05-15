@@ -1,7 +1,18 @@
 <script setup>
 import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { submitRegistration, fetchRegistrationStatus } from '../lib/apiRegistration'
+import {
+  submitRegistration,
+  fetchRegistrationStatus,
+  restoreRegistrationFromClient,
+  RegistrationApiError,
+} from '../lib/apiRegistration'
+import {
+  saveRegistrationBackup,
+  readRegistrationBackup,
+  ensureRegistrationBackupFromServer,
+} from '../lib/registrationBackup'
+import { ensureMaxNotifyClientMark } from '../lib/maxNotifyClientMark'
 import { getOrCreateParticipantId } from '../lib/participantId'
 import { clearSessionEventsForParticipant } from '../lib/sessionEvents'
 import {
@@ -11,6 +22,7 @@ import {
   logRegisterSiteLeave,
   logRegisterStepBack,
   resetRegisterSessionMarkers,
+  markRegisterJustSubmitted,
   SK_REG_FUNNEL_ACTIVE,
   SK_REG_FIRST_OPEN,
 } from '../lib/registerFlowLog'
@@ -169,10 +181,24 @@ async function resetSessionEventsIfFreshFunnel(participantId) {
 onMounted(async () => {
   const pid = getOrCreateParticipantId()
   try {
-    const { registered } = await fetchRegistrationStatus(pid)
+    const { registered, registration } = await fetchRegistrationStatus(pid)
     if (registered) {
-      await router.replace({ name: 'register-complete', query: { returning: '1' } })
+      ensureRegistrationBackupFromServer(pid, registration)
+      ensureMaxNotifyClientMark(pid)
+      await router.replace({ name: 'register-complete' })
       return
+    }
+    const backup = readRegistrationBackup(pid)
+    if (backup) {
+      try {
+        await restoreRegistrationFromClient(backup)
+        saveRegistrationBackup(backup)
+        ensureMaxNotifyClientMark(pid)
+        await router.replace({ name: 'register-complete' })
+        return
+      } catch {
+        /* бэкап повреждён или сервер отклонил — показываем форму */
+      }
     }
   } catch {
     /* нет сети / API — не блокируем сценарий */
@@ -347,32 +373,41 @@ async function onSubmit() {
 
   submitting.value = true
 
-  try {
-    const record = {
-      id: getOrCreateParticipantId(),
-      fullName: form.fullName.trim(),
-      email: form.email.trim(),
-      quizCategory: form.quizCategory,
-      quizCategoryLabel:
-        form.quizCategory === 'company'
-          ? 'Общие знания о компании'
-          : form.quizCategory === 'infosec'
-            ? 'Информационная безопасность'
-            : form.quizCategory,
-      mainPrizeOptIn: true,
-      flow: 'full_registration',
-      victorina: buildVictorinaPayload(),
-      submittedAt: new Date().toISOString(),
-    }
+  const record = {
+    id: getOrCreateParticipantId(),
+    fullName: form.fullName.trim(),
+    email: form.email.trim(),
+    quizCategory: form.quizCategory,
+    quizCategoryLabel:
+      form.quizCategory === 'company'
+        ? 'Общие знания о компании'
+        : form.quizCategory === 'infosec'
+          ? 'Информационная безопасность'
+          : form.quizCategory,
+    mainPrizeOptIn: true,
+    flow: 'full_registration',
+    victorina: buildVictorinaPayload(),
+    submittedAt: new Date().toISOString(),
+  }
 
+  try {
     if (!record.victorina?.length) {
       throw new Error('Нет ответа на вопрос — выберите вариант и нажмите «Завершить» ещё раз.')
     }
 
-    await submitRegistration(record)
+    const created = await submitRegistration(record)
+    saveRegistrationBackup({ ...record, raffleNumber: created.raffleNumber })
+    ensureMaxNotifyClientMark(record.id)
     resetRegisterSessionMarkers()
+    markRegisterJustSubmitted()
     await router.replace({ name: 'register-complete' })
   } catch (e) {
+    if (e instanceof RegistrationApiError && e.status === 409) {
+      saveRegistrationBackup(record)
+      ensureMaxNotifyClientMark(record.id)
+      await router.replace({ name: 'register-complete' })
+      return
+    }
     console.error(e)
     submitError.value =
       e instanceof Error ? e.message : 'Не удалось отправить заявку. Попробуйте ещё раз.'

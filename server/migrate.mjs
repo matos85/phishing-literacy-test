@@ -47,6 +47,10 @@ const statements = [
     KEY idx_se_participant_time (participant_id, occurred_at),
     KEY idx_se_occurred (occurred_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS max_notify_sent (
+    participant_id VARCHAR(36) PRIMARY KEY,
+    notified_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ]
 
 async function ensureUniqueRaffleNumberIndex(pool) {

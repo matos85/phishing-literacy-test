@@ -8,6 +8,29 @@ import { logSessionEvent, nextClientOccurredIso } from './sessionEvents'
 export const SK_REG_FIRST_OPEN = 'pl_reg_first_open_logged'
 /** После первого «Далее» (шаг > 0): не чистить session_events при F5 на форме. Сброс — в resetRegisterSessionMarkers. */
 export const SK_REG_FUNNEL_ACTIVE = 'pl_reg_funnel_active'
+/** После успешной отправки заявки — экран complete без доверия к ?returning= в URL. */
+export const SK_REG_JUST_SUBMITTED = 'pl_reg_just_submitted'
+
+export function markRegisterJustSubmitted() {
+  if (typeof window === 'undefined') return
+  try {
+    sessionStorage.setItem(SK_REG_JUST_SUBMITTED, '1')
+  } catch {
+    /* ignore */
+  }
+}
+
+/** @returns {boolean} true — только что отправили заявку в этой вкладке */
+export function consumeRegisterJustSubmitted() {
+  if (typeof window === 'undefined') return false
+  try {
+    const v = sessionStorage.getItem(SK_REG_JUST_SUBMITTED) === '1'
+    sessionStorage.removeItem(SK_REG_JUST_SUBMITTED)
+    return v
+  } catch {
+    return false
+  }
+}
 const LABEL_MAX = 512
 
 function pathNow() {
